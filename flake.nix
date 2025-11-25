@@ -13,17 +13,31 @@
   };
 
   outputs = { self, nixpkgs, ... }@inputs: {
-    nixosConfigurations.nixos = nixpkgs.lib.nixosSystem {
+    nixosConfigurations = {
+      
+      t490s = nixpkgs.lib.nixosSystem {
+        specialArgs = {inherit inputs;};
 
-      specialArgs = {inherit inputs;};
+        modules = [
+          ./hosts/t490s
+          ./greetd.nix
 
-      modules = [
-        ./configuration.nix
-        ./greetd.nix
+          inputs.determinate.nixosModules.default
+          inputs.home-manager.nixosModules.default
+        ];
+      };
 
-        inputs.determinate.nixosModules.default
-        inputs.home-manager.nixosModules.default
-      ];
+      t420 = nixpkgs.lib.nixosSystem {
+        specialArgs = {inherit inputs;};
+
+        modules = [
+          ./hosts/t420
+          # ./greetd.nix
+
+          # inputs.determinate.nixosModules.default
+          inputs.home-manager.nixosModules.default
+        ];
+      };
 
     };
   };

@@ -24,23 +24,48 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
     in {
-      homeConfigurations."pebor" = home-manager.lib.homeManagerConfiguration {
-        inherit pkgs;
+      homeConfigurations = {
+        "pebor@t490s" = home-manager.lib.homeManagerConfiguration {
+          inherit pkgs;
 
-        extraSpecialArgs = {inherit inputs;};
+          extraSpecialArgs = {inherit inputs;};
 
-        # Specify your home configuration modules here, for example,
-        # the path to your home.nix.
-        modules = [
-          ./home.nix
-          ./fish.nix
-          ./hyprland.nix
-          ./packages
-          ./programs
-        ];
+          # Specify your home configuration modules here, for example,
+          # the path to your home.nix.
+          modules = [
+            ../hosts/t490s/home-manager
+            #./home.nix
+            #./fish.nix
+            #./hyprland.nix
+            #./packages
+          ];
 
-        # Optionally use extraSpecialArgs
-        # to pass through arguments to home.nix
-      };
+          # Optionally use extraSpecialArgs
+          # to pass through arguments to home.nix
+        };
+
+        "pebor@t420" = home-manager.lib.homeManagerConfiguration {
+          inherit pkgs;
+
+          extraSpecialArgs = {inherit inputs;};
+
+          # Specify your home configuration modules here, for example,
+          # the path to your home.nix.
+          modules = [
+            ../hosts/t420/home-manager
+            # ./home.nix
+            # ./fish.nix
+            # ./hyprland.nix
+            # ./packages/terminalPrograms.nix
+            # ./packages/programming.nix
+            # ./packages
+            # ./programs
+          ];
+
+          # Optionally use extraSpecialArgs
+          # to pass through arguments to home.nix
+        };
     };
+  };
+        
 }

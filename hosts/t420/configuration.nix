@@ -2,51 +2,25 @@
 # your system.  Help is available in the configuration.nix(5) man page
 # and in the NixOS manual (accessible by running ‘nixos-help’).
 
-{ config, inputs, pkgs, ... }:
+{ config, pkgs, ... }:
 
 {
-  imports =
-    [ # Include the results of the hardware scan.
-      ./hardware-configuration.nix
-    ];
-
-  hardware.opentabletdriver.enable = true;
-  # programs.nix-ld.enable = true;
-
-  # boot.loader.grub = {
-  #   enable = true;
-  #   theme = "${pkgs.catppuccin-grub}";
-  # };
-
-
   # Bootloader.
-  services.fwupd.enable = true;
-
   boot.loader.systemd-boot.enable = true;
   boot.loader.efi.canTouchEfiVariables = true;
 
-  boot.plymouth = {
-    enable = true;
-    theme = "connect";
-    themePackages = with pkgs; [
-      (adi1090x-plymouth-themes.override {
-        selected_themes = [ "connect" ];
-      })
-    ];
-  };
-  boot.loader.timeout = 0;
-  boot.kernelParams = [
-    "quiet"
-    "splash"
-    "boot.shell_on_fail"
-  ];
+  # Use latest kernel.
+  boot.kernelPackages = pkgs.linuxPackages_latest;
 
-  services.udev.extraRules = ''
-  ACTION=="add", ATTRS{idVendor}=="2dc8", ATTRS{idProduct}=="301c", MODE="0666", \
-  RUN+="/sbin/modprobe xpad", \
-  RUN+="/bin/sh -c 'echo 2dc8 301c > /sys/bus/usb/drivers/xpad/new_id'"
-  KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{serial}=="*vial:f64c2b3c*", MODE="0660", GROUP="users", TAG+="uaccess", TAG+="udev-acl"
-  '';
+  networking.hostName = "t420"; # Define your hostname.
+  # networking.wireless.enable = true;  # Enables wireless support via wpa_supplicant.
+
+  # Configure network proxy if necessary
+  # networking.proxy.default = "http://user:password@proxy:port/";
+  # networking.proxy.noProxy = "127.0.0.1,localhost,internal.domain";
+
+  # Enable networking
+  networking.networkmanager.enable = true;
 
   nix.settings.substituters = [
   	"https://cache.nixos.org/"
@@ -57,19 +31,13 @@
   	"cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
   ];
 
-  nix.extraOptions = "eval-cores = 0\n";
+  # nix.extraOptions = "eval-cores = 0\n";
+  nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
-  networking.hostName = "nixos"; # Define your hostname.
-  # services.tailscale.enable = true;
-  # networking.wireless.enable = true;  # Enables wireless support via wpa_supplicant.
-
-  # Configure network proxy if necessary
-  # networking.proxy.default = "http://user:password@proxy:port/";
-  # networking.proxy.noProxy = "127.0.0.1,localhost,internal.domain";
-
-  # Enable networking
-  networking.networkmanager.enable = true;
-  services.resolved.enable = true;
+  environment.sessionVariables = {
+    NIXOS_OZONE_WL = "1";
+    TERMINAL = "foot";
+  };
 
   # Set your time zone.
   time.timeZone = "Europe/Prague";
@@ -90,31 +58,29 @@
   };
 
   # Enable the X11 windowing system.
+  # You can disable this if you're only using the Wayland session.
   services.xserver.enable = true;
 
-  programs.nix-ld.enable = true;
+  # Enable the KDE Plasma Desktop Environment.
+  services.displayManager.sddm.enable = true;
+  services.desktopManager.plasma6.enable = true;
 
-  # Enable the GNOME Desktop Environment.
-  # services.xserver.displayManager.gdm.enable = true;
-  services.xserver.desktopManager.gnome.enable = true;
-
+  programs.hyprland.enable = true;
+  programs.hyprlock.enable = true;
+  
   # Configure keymap in X11
   services.xserver.xkb = {
-    layout = "cz";
+    layout = "us";
     variant = "";
   };
-
-  # Configure console keymap
-  console.keyMap = "cz-lat2";
 
   # Enable CUPS to print documents.
   services.printing.enable = true;
 
-  # Enable opengl
   hardware.graphics.enable = true;
 
   # Enable sound with pipewire.
-  hardware.pulseaudio.enable = false;
+  services.pulseaudio.enable = false;
   security.rtkit.enable = true;
   services.pipewire = {
     enable = true;
@@ -131,76 +97,43 @@
 
   # Enable touchpad support (enabled default in most desktopManager).
   # services.xserver.libinput.enable = true;
-  powerManagement.powertop.enable = true;
 
-  services.power-profiles-daemon.enable = false;
-
-  programs.steam.enable = true;
-  programs.gamemode.enable = true;
-  programs.gamescope.enable = true;
-
-  programs.adb.enable = true;
-
+  # TODO: needed?
   programs.fish.enable = true;
+
   # Define a user account. Don't forget to set a password with ‘passwd’.
   users.users.pebor = {
     isNormalUser = true;
     shell = pkgs.fish;
     description = "pebor";
-    extraGroups = [ "networkmanager" "wheel" "adbusers" ];
+    extraGroups = [ "networkmanager" "wheel" ];
+    packages = with pkgs; [
+      kdePackages.kate
+    #  thunderbird
+    ];
   };
+
+  # Enable automatic login for the user.
+  services.displayManager.autoLogin.enable = true;
+  services.displayManager.autoLogin.user = "pebor";
+
+  # Install firefox.
+  programs.firefox.enable = true;
+  programs.xwayland.enable = true;
 
   # Allow unfree packages
   nixpkgs.config.allowUnfree = true;
 
-  # programs.waybar.enable = true;
-
-  nix.settings.experimental-features = [ "nix-command" "flakes" ];
-
-  # environment.sessionVariables.NIXOS_OZONE_WL = "1";
-  environment.sessionVariables = {
-    NIXOS_OZONE_WL = "1";
-    TERMINAL = "foot";
-  };
-
-  services.auto-cpufreq.enable = true;
-
-  programs.hyprland.enable = true;
-  programs.hyprlock.enable = true;
-  services.hypridle.enable = true;
-
-  programs.niri.enable = true;
-  programs.xwayland.enable = true;
-
   # List packages installed in system profile. To search, run:
   # $ nix search wget
   environment.systemPackages = with pkgs; [
-    auto-cpufreq
-    niri
-
-    gamescope
-    gamemode
+  #  vim # Do not forget to add an editor to edit configuration.nix! The Nano editor is also installed by default.
+  #  wget
+	helix
+	nh
+	neovim
+	auto-cpufreq
   ];
-
-  fonts.enableDefaultPackages = true;
-  fonts.fontDir.enable = true;
-  fonts.fontconfig.enable = true;
-
-  fonts.packages = with pkgs; [
-    material-design-icons
-    noto-fonts
-    cascadia-code
-    # maple-mono
-    nerd-fonts.jetbrains-mono
-    nerd-fonts.mononoki
-    nerd-fonts.fira-code
-    nerd-fonts.fira-mono
-    noto-fonts-cjk-sans
-    corefonts
-    vista-fonts
-  ];
-
-  hardware.bluetooth.enable = true;
 
   # Some programs need SUID wrappers, can be configured further or are
   # started in user sessions.
@@ -227,6 +160,6 @@
   # this value at the release version of the first install of this system.
   # Before changing this value read the documentation for this option
   # (e.g. man configuration.nix or on https://nixos.org/nixos/options.html).
-  system.stateVersion = "24.11"; # Did you read the comment?
+  system.stateVersion = "25.05"; # Did you read the comment?
 
 }
