@@ -4,11 +4,13 @@
     enable = true;
 
     shellAliases = let
-      homePath = "~/nixos/home-manager";
+      globalNixosPath = "~/nixos";
+      nixosPath = "${globalNixosPath}/hosts/$hostname";
+      homePath = "${nixosPath}/home-manager";
     in {
-      nxswitch = "nh os switch ~/nixos/";
-      nxedit = "hx ~/nixos";
-      nxeswitch = "hx ~/nixos/ && nh os switch ~/nixos/";
+      nxswitch = "nh os switch ${globalNixosPath}";
+      nxedit = "hx ${nixosPath}";
+      nxeswitch = "hx ${nixosPath} && nh os switch ${globalNixosPath}";
 
       hmswitch = "nh home switch ${homePath}";
       hmedit = "hx ${homePath}";

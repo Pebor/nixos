@@ -59,7 +59,7 @@
 
   nix.extraOptions = "eval-cores = 0\n";
 
-  networking.hostName = "nixos"; # Define your hostname.
+  networking.hostName = "t490s"; # Define your hostname.
   # services.tailscale.enable = true;
   # networking.wireless.enable = true;  # Enables wireless support via wpa_supplicant.
 
