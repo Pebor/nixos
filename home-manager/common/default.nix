@@ -3,9 +3,10 @@
   inputs,
   ...
 }: {
+
   imports = [
-    ./home.nix
-    ./packages
+    ./fish.nix
+    ./hyprland.nix
   ];
     
 }

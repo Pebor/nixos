@@ -34,6 +34,7 @@
           # the path to your home.nix.
           modules = [
             ../hosts/t490s/home-manager
+            ./common
             #./home.nix
             #./fish.nix
             #./hyprland.nix
@@ -53,6 +54,7 @@
           # the path to your home.nix.
           modules = [
             ../hosts/t420/home-manager
+            ./common
             # ./home.nix
             # ./fish.nix
             # ./hyprland.nix
