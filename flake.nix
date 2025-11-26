@@ -39,6 +39,18 @@
         ];
       };
 
+      t420-server = nixpkgs.lib.nixosSystem {
+        specialArgs = {inherit inputs;};
+
+        modules = [
+          ./hosts/t420-server
+          # ./greetd.nix
+
+          # inputs.determinate.nixosModules.default
+          inputs.home-manager.nixosModules.default
+        ];
+      };
+
     };
   };
 }
