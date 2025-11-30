@@ -33,8 +33,8 @@
           # Specify your home configuration modules here, for example,
           # the path to your home.nix.
           modules = [
-            ../hosts/t490s/home-manager
             ./common
+            ../hosts/t490s/home-manager
             #./home.nix
             #./fish.nix
             #./hyprland.nix
@@ -53,8 +53,8 @@
           # Specify your home configuration modules here, for example,
           # the path to your home.nix.
           modules = [
-            ../hosts/t420/home-manager
             ./common
+            ../hosts/t420/home-manager
             # ./home.nix
             # ./fish.nix
             # ./hyprland.nix

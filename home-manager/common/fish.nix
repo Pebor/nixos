@@ -6,15 +6,16 @@
     shellAliases = let
       globalNixosPath = "~/nixos";
       nixosPath = "${globalNixosPath}/hosts/$hostname";
+      globalHomePath = "${globalNixosPath}/home-manager";
       homePath = "${nixosPath}/home-manager";
     in {
       nxswitch = "nh os switch ${globalNixosPath}";
       nxedit = "hx ${nixosPath}";
       nxeswitch = "hx ${nixosPath} && nh os switch ${globalNixosPath}";
 
-      hmswitch = "nh home switch ${homePath}";
+      hmswitch = "nh home switch ${globalHomePath}";
       hmedit = "hx ${homePath}";
-      hmeswitch = "hx ${homePath} && nh home switch ${homePath}";
+      hmeswitch = "hx ${homePath} && nh home switch ${globalHomePath}";
 
       j = "z";
       zel = "zellij";

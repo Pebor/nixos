@@ -5,6 +5,7 @@
 }: {
   imports = [
     ./home.nix
+    ./hyprland.nix
     ./packages
   ];
     
