@@ -2,8 +2,11 @@
   home.packages = with pkgs; [
     # Terminals
     foot
+    ratty
+    # ghostty
     
     git
+    jujutsu
 
     inputs.helix.packages."${system}".default
 
@@ -11,8 +14,8 @@
     comma
     nix-index
 
-    aichat
-    ollama
+    # aichat
+    # ollama
     gemini-cli
   
     btop
@@ -26,17 +29,22 @@
     tldr
 
     ffmpeg
+    imagemagick
 
     nushell
+    brush
 
     fastfetch
     powertop
     bluetui
+    # impala
     spotify-player
     systemctl-tui
     lazygit
 
     zellij
     yazi
+
+    opencode
   ];
 }

@@ -17,13 +17,89 @@
 
   nixpkgs.config = { allowUnfree = true; };
 
+  stylix = {
+    enable = true;
+    base16Scheme = "${pkgs.base16-schemes}/share/themes/onedark-dark.yaml";
+
+    icons = {
+      enable = true;
+      package = pkgs.tela-icon-theme;
+      dark = "Tela-dark";
+      light = "Tela";
+    };
+
+    fonts = {
+      sansSerif = {
+        package = pkgs.inter;
+        name = "Inter";
+      };
+      serif = {
+        package = pkgs.noto-fonts;
+        name = "Noto Serif";
+      };
+      monospace = {
+        package = pkgs.fira-code;
+        name = "Fira Code";
+      };
+      emoji = {
+        package = pkgs.noto-fonts-color-emoji;
+        name = "Noto Color Emoji";
+      };
+    };
+
+    # fonts = {
+    #   monospace = {
+    #     package = pkgs.nerd-fonts.jetbrains-mono;
+    #     name = "JetBrainsMono Nerd Font";
+    #   };
+    #   sansSerif = {
+    #     package = pkgs.roboto;
+    #     name = "Roboto";
+    #   };
+    #   serif = {
+    #     package = pkgs.roboto-slab;
+    #     name = "Roboto Slab";
+    #   };
+    #   emoji = {
+    #     package = pkgs.noto-fonts-emoji;
+    #     name = "Noto Color Emoji";
+    #   };
+    # };
+
+    # fonts = {
+    #   sansSerif = {
+    #     package = pkgs.ibm-plex;
+    #     name = "IBM Plex Sans";
+    #   };
+    #   serif = {
+    #     package = pkgs.ibm-plex;
+    #     name = "IBM Plex Serif";
+    #   };
+    #   monospace = {
+    #     package = pkgs.monaspace;
+    #     name = "Monaspace Neon";
+    #   };
+    #   emoji = {
+    #     package = pkgs.noto-fonts-emoji;
+    #     name = "Noto Color Emoji";
+    #   };
+    # };
+
+    targets = {
+      hyprland.enable = false;
+      hyprlock.enable = false;
+      hyprpaper.enable = false;
+    };
+  };
+
+
+  home.sessionPath = [
+    "/home/pebor/.local/bin"
+  ];
+
   # The home.packages option allows you to install Nix packages into your
   # environment.
   home.packages = with pkgs; [
-  ];
-
-  wayland.windowManager.hyprland.plugins = [
-    pkgs.hyprlandPlugins.hyprscrolling
   ];
 
   # Home Manager is pretty good at managing dotfiles. The primary way to manage

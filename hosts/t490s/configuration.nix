@@ -5,13 +5,65 @@
 { config, inputs, pkgs, ... }:
 
 {
-  # imports =
-  #   [ # Include the results of the hardware scan.
-  #     ./hardware-configuration.nix
-  #   ];
+  imports =
+    [
+      inputs.mangowc.nixosModules.mango
+    ];
 
+  nixpkgs.overlays = [
+        (self: super: {
+            lmms = super.lmms.overrideAttrs {
+                version = "1.3.0-alpha.1";
+                src = pkgs.fetchFromGitHub {
+                    owner = "LMMS";
+                    repo = "lmms";
+                    rev = "bda042e1eb59e4c7508faa072051c50c2e12894d";
+                    sha256 = "sha256-EGJcTzPUkIqURHKjX6dTRkeRTqwHM8eG74lYVILgSAs";
+                    fetchSubmodules = true;
+                };
+                patches = [];
+            };
+        })
+    ];
+
+  documentation.man.generateCaches = false;
+  
   hardware.opentabletdriver.enable = true;
-  # programs.nix-ld.enable = true;
+  programs.nix-ld.enable = true;
+  programs.nix-ld.libraries = with pkgs; [
+    stdenv.cc.cc
+    zlib
+    fuse3
+    icu
+    zlib
+    nss
+    openssl
+    curl
+    expat
+    # Common Android dependencies?
+    glibc
+    glib
+    ncurses5
+  ];
+
+  systemd.oomd = {
+    enable = true;
+    enableUserSlices = true; # Act on user sessions
+  };
+
+  stylix = {
+    enable = true;
+    base16Scheme = "${pkgs.base16-schemes}/share/themes/onedark-dark.yaml";
+
+    # iconTheme = {
+    #   enable = true;
+    #   package = pkgs.tela-icon-theme;
+    # };
+
+    targets = {
+      plymouth.enable = false;
+    };
+  };
 
   # boot.loader.grub = {
   #   enable = true;
@@ -51,16 +103,20 @@
   nix.settings.substituters = [
   	"https://cache.nixos.org/"
   	"https://cache.garnix.io "
+  	"https://nix-logseq-git-flake.cachix.org"
+  	"https://noctalia.cachix.org"
   ];
   nix.settings.trusted-public-keys = [
   	"cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
   	"cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
+    "nix-logseq-git-flake.cachix.org-1:DSBNW07PSRyCvS926tpIWahb53OIydwwZhsP6LhJNZo="
+    "noctalia.cachix.org-1:pCOR47nnMEo5thcxNDtzWpOxNFQsBRglJzxWPp3dkU4="
   ];
 
   nix.extraOptions = "eval-cores = 0\n";
 
   networking.hostName = "t490s"; # Define your hostname.
-  # services.tailscale.enable = true;
+  services.tailscale.enable = true;
   # networking.wireless.enable = true;  # Enables wireless support via wpa_supplicant.
 
   # Configure network proxy if necessary
@@ -90,13 +146,18 @@
   };
 
   # Enable the X11 windowing system.
-  services.xserver.enable = true;
+  # services.xserver.enable = true;
 
-  programs.nix-ld.enable = true;
+  programs.kdeconnect.enable = true;
+  
+  # programs.nix-ld.enable = true;
 
   # Enable the GNOME Desktop Environment.
   # services.xserver.displayManager.gdm.enable = true;
-  services.xserver.desktopManager.gnome.enable = true;
+  # services.xserver.desktopManager.gnome.enable = true;
+
+  services.desktopManager.cosmic.enable = true;
+  # services.displayManager.cosmic-greeter.enable = true;
 
   # Configure keymap in X11
   services.xserver.xkb = {
@@ -139,15 +200,13 @@
   programs.gamemode.enable = true;
   programs.gamescope.enable = true;
 
-  programs.adb.enable = true;
-
   programs.fish.enable = true;
   # Define a user account. Don't forget to set a password with ‘passwd’.
   users.users.pebor = {
     isNormalUser = true;
     shell = pkgs.fish;
     description = "pebor";
-    extraGroups = [ "networkmanager" "wheel" "adbusers" ];
+    extraGroups = [ "networkmanager" "wheel" "adbusers" "kvm" ];
   };
 
   # Allow unfree packages
@@ -172,14 +231,29 @@
   programs.niri.enable = true;
   programs.xwayland.enable = true;
 
+  programs.mango.enable = true;
+
   # List packages installed in system profile. To search, run:
   # $ nix search wget
   environment.systemPackages = with pkgs; [
     auto-cpufreq
+
     niri
+    # inputs.shko.packages.${system}.default
 
     gamescope
     gamemode
+
+    android-tools
+    android-studio
+
+    inputs.logseq-nightly.packages.${pkgs.system}.logseq
+    inputs.logseq-nightly.packages.${pkgs.system}.logseq-cli
+
+    inputs.noctalia.packages.${pkgs.stdenv.hostPlatform.system}.default
+
+    lmms
+    base16-schemes
   ];
 
   fonts.enableDefaultPackages = true;
@@ -198,6 +272,9 @@
     noto-fonts-cjk-sans
     corefonts
     vista-fonts
+    google-fonts
+    roboto-mono
+    googlesans-code
   ];
 
   hardware.bluetooth.enable = true;

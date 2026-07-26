@@ -3,7 +3,7 @@
   inputs,
   ...
 }: let
-  tuigreet = "${pkgs.tuigreet}/bin/tuigreet";
+  tuigreet_path = "${pkgs.tuigreet}/bin/tuigreet";
   hyprland-session = "${pkgs.hyprland}/share/wayland-sessions";
   niri-session = "${pkgs.niri}/share/wayland-sessions";
 in {
@@ -11,7 +11,7 @@ in {
     enable = true;
     settings = {
       default_session = {
-        command = "${tuigreet} --time --remember --remember-session --sessions ${hyprland-session}:${niri-session}";
+        command = "${tuigreet_path} --time --remember --remember-session --sessions ${hyprland-session}:${niri-session}";
         user = "greeter";
       };
     };
@@ -19,7 +19,7 @@ in {
 
   
   environment.systemPackages = with pkgs; [
-    greetd.tuigreet
+    tuigreet
   ];
 
   # this is a life saver.

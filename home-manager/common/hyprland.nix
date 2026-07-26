@@ -19,8 +19,6 @@
     rose-pine-cursor
     rose-pine-gtk-theme
     rose-pine-icon-theme
-
-    quickshell
   ];
 
   wayland.windowManager.hyprland = {
@@ -39,14 +37,14 @@
 
       # Autostart
       "exec-once" = [
-        "dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP"
-        "dbus-update-activation-environment --systemd --all"
-        "systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP"
+        # "dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP"
+        # "dbus-update-activation-environment --systemd --all"
+        # "systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP"
         "waybar"
-        "libinput-gestures"
-        "fprintd"
-        "hypridle"
-        "hyprpaper"
+        # "libinput-gestures"
+        # "fprintd"
+        # "hypridle"
+        # "hyprpaper"
         "dunst"
         "systemctl --user start plasma-polkit-agent"
       ];
@@ -81,7 +79,7 @@
 
       # Decoration
       decoration = {
-        rounding = 10;
+        rounding = 0;
         active_opacity = 1.0;
         inactive_opacity = 1.0;
         blur = {
@@ -125,7 +123,7 @@
 
       # Layouts
       dwindle = {
-        pseudotile = true;
+        # pseudotile = true;
         preserve_split = true;
       };
 
@@ -137,15 +135,15 @@
       misc = {
         force_default_wallpaper = -1;
         disable_hyprland_logo = false;
-        vfr = true;
-        new_window_takes_over_fullscreen = 1;
+        # vfr = true;
+        on_focus_under_fullscreen = 1;
       };
 
       # Input
       input = {
         kb_layout = "cz,cz";
         kb_variant = "coder,";
-        kb_options = "grp:alt_shift_toggle";
+        kb_options = "grp:alt_ctrl_toggle";
         follow_mouse = 1;
         sensitivity = 0;
         repeat_delay = 200;
@@ -180,6 +178,8 @@
       "$mainMod" = "SUPER";
       bind = [
         "$mainMod, RETURN, exec, $terminal"
+        # "$mainMod, RETURN, exec, foot -e zellij"
+        # "$mainMod CTRL, RETURN, exec, foot"
         "$mainMod, M, exec, wofi-emoji"
         "$mainMod, E, exec, $fileManager"
         "$mainMod SHIFT, E, exec, foot -e yazi"
@@ -244,11 +244,11 @@
         ",XF86MonBrightnessDown, exec, brightnessctl s 10%-"
       ];
 
-      # Window Rules
-      windowrulev2 = [
-        "suppressevent maximize, class:.*"
-        "immediate, class:Minecraft"
-      ];
+      # # Window Rules
+      # windowrulev2 = [
+      #   "suppressevent maximize, class:.*"
+      #   "immediate, class:Minecraft"
+      # ];
     };
   };
 }

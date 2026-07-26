@@ -33,6 +33,12 @@
     shellAbbrs = {
       nxshell = "nix shell nixpkgs#";
     };
+
+    interactiveShellInit = ''
+    if type -q devenv
+      devenv hook fish | source
+    end
+  '';
     
   };
 

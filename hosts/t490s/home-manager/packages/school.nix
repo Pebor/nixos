@@ -1,6 +1,6 @@
 { pkgs, ...}: {
   home.packages = with pkgs; [
-    teams-for-linux
+    # teams-for-linux
 
     rnote
     xournalpp
@@ -15,17 +15,19 @@
     haskellPackages.stack
     haskell-language-server
     haskellPackages.ghc
+    swi-prolog
 
     # TJV
-    jetbrains.idea-ultimate
+    jetbrains.idea
     maven
+    jdt-language-server
 
     # IDO
-    google-chrome
-    chromedriver
-    openvpn
-    update-systemd-resolved
-    networkmanager-openvpn
+    # google-chrome
+    # chromedriver
+    # openvpn
+    # update-systemd-resolved
+    # networkmanager-openvpn
     docker
     podman
   ];
