@@ -1,88 +1,68 @@
 {
-  description = "Nixos config flake";
+  description = "pebor's NixOS + Home Manager configurations (dendritic, flake-parts)";
 
   inputs = {
+    # Two nixpkgs inputs with independent update cadence:
+    #   nixpkgs    -> system (nixos-rebuild), updated every few weeks
+    #   nixpkgs-hm -> standalone Home Manager, updated daily
+    # Update selectively:
+    #   nix flake lock --update-input nixpkgs
+    #   nix flake lock --update-input nixpkgs-hm
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    nixpkgs-hm.url = "github:nixos/nixpkgs/nixos-unstable";
 
+    flake-parts.url = "github:hercules-ci/flake-parts";
+    import-tree.url = "github:vic/import-tree";
+
+    # --- Home-Manager-side inputs (follow nixpkgs-hm) ---
     home-manager = {
       url = "github:nix-community/home-manager";
-      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.nixpkgs.follows = "nixpkgs-hm";
     };
-
-    determinate.url = "https://flakehub.com/f/DeterminateSystems/determinate/*";
-
-    logseq-nightly = {
-      url = "github:Bad3r/nix-logseq-git-flake";
-      inputs.nixpkgs.follows = "nixpkgs";
+    # NOTE: inputs with their own binary caches (helix, logseq-nightly,
+    # noctalia) deliberately do NOT follow our nixpkgs — overriding their
+    # nixpkgs changes the derivation and makes their cache miss, forcing a
+    # local source build. They pull their own (binary-cached) nixpkgs pin.
+    helix.url = "github:helix-editor/helix";
+    helium = {
+      url = "github:schembriaiden/helium-browser-nix-flake";
+      inputs.nixpkgs.follows = "nixpkgs-hm";
     };
+    logseq-nightly.url = "github:Bad3r/nix-logseq-git-flake";
+    zen-browser.url = "github:0xc000022070/zen-browser-flake";
+    rose-pine-hyprcursor.url = "github:ndom91/rose-pine-hyprcursor";
+    otter-launcher.url = "github:kuokuo123/otter-launcher";
+    # Kept intentionally: Affinity suite. Usage stays commented out in
+    # modules/home/packages-apps.nix until needed.
+    affinity-nix.url = "github:mrshmllow/affinity-nix";
 
-    mangowc = {
-      url = "github:mangowm/mango";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-    # shko = {
-    #   url = "git+https://www.codeberg.org/polygonalbones/shko-flake";
-    #   inputs.nixpkgs.follows = "nixpkgs";
-    # };
-
+    # --- NixOS-system-side inputs (follow nixpkgs) ---
     stylix = {
       url = "github:nix-community/stylix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-
-    
-    noctalia = {
-      url = "github:noctalia-dev/noctalia-shell";
+    determinate.url = "https://flakehub.com/f/DeterminateSystems/determinate/*";
+    mangowc = {
+      url = "github:mangowm/mango";
       inputs.nixpkgs.follows = "nixpkgs";
-      inputs.noctalia-qs.follows = "noctalia-qs";
     };
-
-    noctalia-qs = {
-      url = "github:noctalia-dev/noctalia-qs";
+    noctalia.url = "github:noctalia-dev/noctalia-shell";
+    # Kept intentionally for a possible bleeding-edge niri. NOT used by default:
+    # the niri flake has no binary cache, so using it means a long local Rust
+    # build on every update. modules/features/niri.nix uses the (cached)
+    # nixpkgs package instead; switch `programs.niri.package` there if wanted.
+    niri = {
+      url = "github:YaLTeR/niri";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, ... }@inputs: {
-    nixosConfigurations = {
-      
-      t490s = nixpkgs.lib.nixosSystem {
-        specialArgs = {inherit inputs;};
-
-        modules = [
-          ./hosts/t490s
-          ./greetd.nix
-
-          inputs.determinate.nixosModules.default
-          inputs.home-manager.nixosModules.default
-          inputs.stylix.nixosModules.default
-        ];
-      };
-
-      t420 = nixpkgs.lib.nixosSystem {
-        specialArgs = {inherit inputs;};
-
-        modules = [
-          ./hosts/t420
-          # ./greetd.nix
-
-          # inputs.determinate.nixosModules.default
-          inputs.home-manager.nixosModules.default
-        ];
-      };
-
-      t420-server = nixpkgs.lib.nixosSystem {
-        specialArgs = {inherit inputs;};
-
-        modules = [
-          ./hosts/t420-server
-          # ./greetd.nix
-
-          # inputs.determinate.nixosModules.default
-          inputs.home-manager.nixosModules.default
-        ];
-      };
-
+  outputs = inputs:
+    inputs.flake-parts.lib.mkFlake { inherit inputs; } {
+      systems = [ "x86_64-linux" ];
+      imports = [
+        inputs.flake-parts.flakeModules.modules
+        (inputs.import-tree ./modules)
+      ];
     };
-  };
 }
