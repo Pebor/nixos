@@ -54,6 +54,12 @@
     # FIXME: set to the release you install with (check `nixos-version` on the ISO).
     system.stateVersion = "26.05";
 
+    # T14 Gen 2 prints harmless but constant ACPI (AE_NOT_FOUND) and
+    # "thermal_zone: failed to read out thermal zone" errors at KERN_ERR
+    # level, which "quiet" still shows — flooding the console/greetd.
+    # Drop console loglevel below KERN_ERR; journalctl keeps everything.
+    boot.consoleLogLevel = 3;
+
     services.resolved.enable = true;
     services.fwupd.enable = true;
 
