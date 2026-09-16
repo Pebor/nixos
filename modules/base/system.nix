@@ -26,7 +26,7 @@
 
     # Always-available system tools (editor + nix helper).
     environment.systemPackages = with pkgs; [
-      neovim
+      # neovim
       nh
     ];
   };

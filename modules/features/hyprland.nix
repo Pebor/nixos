@@ -41,7 +41,7 @@
       libwacom
 
       rose-pine-cursor
-      rose-pine-gtk-theme
+      # rose-pine-gtk-theme
       rose-pine-icon-theme
     ];
 

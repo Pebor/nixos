@@ -86,7 +86,7 @@
       packages-programming
       packages-apps
       packages-school
-      llm
+      # llm
     ];
 
     home.stateVersion = "24.11";
