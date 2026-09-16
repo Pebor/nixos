@@ -26,7 +26,7 @@
     nixpkgs.config.allowUnfree = true;
 
     # Avoid the expensive man-db cache build on every system change.
-    documentation.man.generateCaches = false;
+    documentation.man.cache.enable = false;
   };
 
   flake.modules.homeManager.nix-settings = {

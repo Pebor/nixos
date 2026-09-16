@@ -10,13 +10,13 @@
       git
       jujutsu
 
-      inputs.helix.packages.${pkgs.system}.default
+      inputs.helix.packages.${pkgs.stdenv.hostPlatform.system}.default
 
       nh
       comma
       nix-index
 
-      gemini-cli
+      antigravity-cli # gemini-cli was removed upstream, replaced by this
 
       btop
       bottom

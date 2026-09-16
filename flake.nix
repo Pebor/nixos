@@ -1,6 +1,23 @@
 {
   description = "pebor's NixOS + Home Manager configurations (dendritic, flake-parts)";
 
+  # Binary caches active even before the system config applies (e.g. during
+  # `nixos-install` from the ISO). Mirror of modules/base/nix.nix — keep in sync.
+  nixConfig = {
+    extra-substituters = [
+      "https://cache.garnix.io"
+      "https://nix-logseq-git-flake.cachix.org"
+      "https://noctalia.cachix.org"
+      "https://helix.cachix.org"
+    ];
+    extra-trusted-public-keys = [
+      "cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
+      "nix-logseq-git-flake.cachix.org-1:DSBNW07PSRyCvS926tpIWahb53OIydwwZhsP6LhJNZo="
+      "noctalia.cachix.org-1:pCOR47nnMEo5thcxNDtzWpOxNFQsBRglJzxWPp3dkU4="
+      "helix.cachix.org-1:ejp9KQpR1FBI2onstMQ34yogDm4OgU2ru6lIwPvuCVs="
+    ];
+  };
+
   inputs = {
     # Two nixpkgs inputs with independent update cadence:
     #   nixpkgs    -> system (nixos-rebuild), updated every few weeks
@@ -31,7 +48,6 @@
     logseq-nightly.url = "github:Bad3r/nix-logseq-git-flake";
     zen-browser.url = "github:0xc000022070/zen-browser-flake";
     rose-pine-hyprcursor.url = "github:ndom91/rose-pine-hyprcursor";
-    otter-launcher.url = "github:kuokuo123/otter-launcher";
     # Kept intentionally: Affinity suite. Usage stays commented out in
     # modules/home/packages-apps.nix until needed.
     affinity-nix.url = "github:mrshmllow/affinity-nix";
@@ -42,6 +58,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     determinate.url = "https://flakehub.com/f/DeterminateSystems/determinate/*";
+    disko = {
+      url = "github:nix-community/disko";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     mangowc = {
       url = "github:mangowm/mango";
       inputs.nixpkgs.follows = "nixpkgs";

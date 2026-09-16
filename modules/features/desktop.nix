@@ -26,6 +26,8 @@
     fonts.enableDefaultPackages = true;
     fonts.fontDir.enable = true;
     fonts.fontconfig.enable = true;
+    # corefonts/vista-fonts (flaky SourceForge fetch) and google-fonts
+    # (~1.5 GB) intentionally omitted — slow down fresh installs.
     fonts.packages = with pkgs; [
       material-design-icons
       noto-fonts
@@ -35,9 +37,6 @@
       nerd-fonts.fira-code
       nerd-fonts.fira-mono
       noto-fonts-cjk-sans
-      corefonts
-      vista-fonts
-      google-fonts
       roboto-mono
       googlesans-code
     ];

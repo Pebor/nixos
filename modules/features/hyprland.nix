@@ -29,11 +29,15 @@
       waybar
       tofi
       brightnessctl
-      inputs.rose-pine-hyprcursor.packages.${pkgs.system}.default
+      inputs.rose-pine-hyprcursor.packages.${pkgs.stdenv.hostPlatform.system}.default
       wofi-emoji
       wleave
       grimblast
       wl-clipboard
+
+      # Provides the plasma-polkit-agent user unit started in exec-once
+      # below (previously referenced but never installed — dead line).
+      kdePackages.polkit-kde-agent-1
 
       libnotify
       libqalculate
