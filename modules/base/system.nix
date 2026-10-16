@@ -28,6 +28,14 @@
     environment.systemPackages = with pkgs; [
       # neovim
       nh
+      usbutils
+      pciutils
+      lshw
+      lm_sensors
+      file
+      tree
+      ouch
+      wget
     ];
   };
 }

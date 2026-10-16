@@ -53,6 +53,7 @@ in
         hyprland.enable = false;
         hyprlock.enable = false;
         hyprpaper.enable = false;
+        gtksourceview.enable = false;
       };
     };
 

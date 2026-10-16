@@ -86,7 +86,6 @@
       packages-programming
       packages-apps
       packages-school
-      packages-heavy
       # llm
     ];
 

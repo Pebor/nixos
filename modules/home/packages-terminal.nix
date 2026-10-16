@@ -16,7 +16,7 @@
       comma
       nix-index
 
-      antigravity-cli # gemini-cli was removed upstream, replaced by this
+      antigravity-cli
 
       btop
       bottom

@@ -42,6 +42,7 @@
       gaming
       desktop
       tailscale
+      build-client
       nix-ld
       oomd
     ]);
@@ -73,7 +74,6 @@
       packages-programming
       packages-apps
       packages-school
-      packages-heavy
       llm
     ];
 

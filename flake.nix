@@ -48,29 +48,28 @@
     logseq-nightly.url = "github:Bad3r/nix-logseq-git-flake";
     zen-browser.url = "github:0xc000022070/zen-browser-flake";
     rose-pine-hyprcursor.url = "github:ndom91/rose-pine-hyprcursor";
-    # Kept intentionally: Affinity suite. Usage stays commented out in
-    # modules/home/packages-apps.nix until needed.
     affinity-nix.url = "github:mrshmllow/affinity-nix";
+    spotifast.url = "github:crmne/spotifast";
 
     # --- NixOS-system-side inputs (follow nixpkgs) ---
     stylix = {
       url = "github:nix-community/stylix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
     determinate.url = "https://flakehub.com/f/DeterminateSystems/determinate/*";
+
     disko = {
       url = "github:nix-community/disko";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    noctalia.url = "github:noctalia-dev/noctalia-shell";
+
     mangowc = {
       url = "github:mangowm/mango";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    noctalia.url = "github:noctalia-dev/noctalia-shell";
-    # Kept intentionally for a possible bleeding-edge niri. NOT used by default:
-    # the niri flake has no binary cache, so using it means a long local Rust
-    # build on every update. modules/features/niri.nix uses the (cached)
-    # nixpkgs package instead; switch `programs.niri.package` there if wanted.
     niri = {
       url = "github:YaLTeR/niri";
       inputs.nixpkgs.follows = "nixpkgs";

@@ -2,6 +2,8 @@
 {
   flake.modules.homeManager.packages-school = { pkgs, ... }: {
     home.packages = with pkgs; [
+      teams-for-linux
+
       rnote
       xournalpp
 

@@ -57,7 +57,8 @@
         # Monitors
         monitor = [
           ",preferred,0x1080,1"
-          "HDMI-A-2,preferred,0x0,1"
+          "HDMI-A-2,highrr,0x0,1"
+          "HDMI-A-1,highrr,0x0,1"
         ];
 
         # Variables
@@ -166,7 +167,7 @@
           kb_variant = "coder,";
           kb_options = "grp:alt_ctrl_toggle";
           follow_mouse = 1;
-          sensitivity = 0;
+          sensitivity = 0.2;
           repeat_delay = 200;
           touchpad = {
             natural_scroll = true;
@@ -271,34 +272,34 @@
       enable = true;
       settings = {
         general = {
-          lock_cmd = "pidof hyprlock || hyprlock"; # avoid starting multiple hyprlock instances.
-          before_sleep_cmd = "loginctl lock-session"; # lock before suspend.
-          after_sleep_cmd = "hyprctl dispatch dpms on"; # to avoid having to press a key twice to turn on the display.
+          lock_cmd = "pidof hyprlock || hyprlock";
+          before_sleep_cmd = "loginctl lock-session";
+          after_sleep_cmd = "hyprctl dispatch dpms on";
         };
 
         listener = [
           {
-            timeout = 150; # 2.5min.
-            on-timeout = "brightnessctl -s set 10"; # set monitor backlight to minimum, avoid 0 on OLED monitor.
-            on-resume = "brightnessctl -r"; # monitor backlight restore.
+            timeout = 150; # 2.5 min
+            on-timeout = "brightnessctl -s set 10";
+            on-resume = "brightnessctl -r";
           }
           {
-            timeout = 150; # 2.5min.
-            on-timeout = "brightnessctl -sd rgb:kbd_backlight set 0"; # turn off keyboard backlight.
-            on-resume = "brightnessctl -rd rgb:kbd_backlight"; # turn on keyboard backlight.
+            timeout = 150; # 2.5 min
+            on-timeout = "brightnessctl -sd rgb:kbd_backlight set 0";
+            on-resume = "brightnessctl -rd rgb:kbd_backlight";
           }
           {
-            timeout = 600; # 5min
-            on-timeout = "loginctl lock-session"; # lock screen when timeout has passed
+            timeout = 300; # 5 min (zámek musí přijít před vypnutím displeje)
+            on-timeout = "loginctl lock-session";
           }
           {
-            timeout = 300; # 5.5min
-            on-timeout = "hyprctl dispatch dpms off"; # screen off when timeout has passed
-            on-resume = "hyprctl dispatch dpms on"; # screen on when activity is detected after timeout has fired.
+            timeout = 330; # 5.5 min (vypnutí displeje s bezpečným odstupem od zámku)
+            on-timeout = "hyprctl dispatch dpms off";
+            on-resume = "hyprctl dispatch dpms on";
           }
           {
-            timeout = 1200; # 30min
-            on-timeout = "systemctl suspend"; # suspend pc
+            timeout = 1200; # 20 min (skutečný limit pro suspend)
+            on-timeout = "systemctl suspend";
           }
         ];
       };

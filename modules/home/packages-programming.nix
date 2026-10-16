@@ -1,5 +1,4 @@
 # Programming toolchains (superset of the old per-host copies).
-# Heavy tools (kotlin-native, emacs, ollama, zed) live in packages-heavy.nix.
 {
   flake.modules.homeManager.packages-programming = { pkgs, ... }: {
     home.packages = with pkgs; [
@@ -30,6 +29,7 @@
       tinymist
 
       # Python
+      python3
       uv
 
       # Nim
@@ -47,6 +47,7 @@
       # Kotlin
       kotlin
       kotlin-language-server
+      kotlin-native
 
       # js/ts :(
       bun
@@ -60,6 +61,8 @@
 
       # vlang
       vlang
+
+      zed-editor-fhs
     ];
   };
 }
