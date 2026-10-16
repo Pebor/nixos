@@ -9,7 +9,10 @@
 #
 # `hermes` on the server talks to him via docker exec; `hermes-client` (Home
 # Manager, imported by the other hosts) wraps the same call over SSH so every
-# machine can reach him with the same command.
+# machine can reach him with the same command. Interactive access from those
+# hosts attaches to the persistent `hermes` zellij session (unlock-first
+# keybinds, seeded in host-t490s-server's Home Manager config) via
+# `hermes-zellij`, so the TUI survives detaches and follows you around.
 { inputs, ... }:
 {
   flake.modules.nixos.hermes =
@@ -95,6 +98,17 @@
           fi
         '';
       };
+
+      # Interactive access from any machine: create-or-attach to the
+      # persistent `hermes` zellij session whose first pane runs the TUI, so
+      # the session survives detaches and follows you across machines.
+      # zellij comes from the user profile (home/packages-terminal.nix).
+      hermes-zellij = pkgs.writeShellApplication {
+        name = "hermes-zellij";
+        text = ''
+          exec zellij attach -c hermes -- hermes --tui
+        '';
+      };
     in
     {
       virtualisation.oci-containers.backend = "docker";
@@ -121,7 +135,7 @@
         ];
       };
 
-      environment.systemPackages = [ hermes ];
+      environment.systemPackages = [ hermes hermes-zellij ];
 
       # The generated unit is Restart=on-failure; a gateway is meant to be up.
       systemd.services.docker-hermes.serviceConfig.Restart = lib.mkForce "always";
@@ -204,9 +218,13 @@
         name = "hermes";
         runtimeInputs = [ pkgs.openssh ];
         text = ''
-          # Same CLI as on the t490s-server, reached over SSH.
+          # Same CLI as on the t490s-server, reached over SSH. An interactive
+          # bare `hermes` attaches to the persistent `hermes` zellij session
+          # running the TUI; anything else goes to the plain CLI as before.
           dest="''${HERMES_SSH_DEST:-server@t490s}"
-          if [ -t 0 ]; then
+          if [ -t 0 ] && [ "$#" -eq 0 ]; then
+            exec ssh -t "$dest" hermes-zellij
+          elif [ -t 0 ]; then
             exec ssh -t "$dest" hermes "$@"
           else
             exec ssh "$dest" hermes "$@"

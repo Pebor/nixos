@@ -102,6 +102,15 @@
     home.sessionVariables.EDITOR = "hx";
     programs.home-manager.enable = true;
 
+    # The `hermes` zellij session (modules/features/hermes.nix) runs the
+    # Hermes TUI in its first pane. The unlock-first preset keeps zellij
+    # inert until Ctrl+g, so the TUI receives every keystroke (Ctrl+G
+    # editor, Ctrl+X session switcher, ...) instead of zellij modes eating
+    # them. Server-only on purpose: other hosts keep their default zellij.
+    xdg.configFile."zellij/config.kdl".text = ''
+      keybinds preset="unlock-first" {}
+    '';
+
     home.stateVersion = "24.11";
 
     # The hostname is still "t490s", so nh's default attr auto-detection
