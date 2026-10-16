@@ -41,6 +41,7 @@
       oomd
 
       docker
+      hermes
       build-worker
       harmonia
       cache-warm

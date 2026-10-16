@@ -83,6 +83,7 @@
       stylix
 
       packages-terminal
+      hermes-client
       packages-programming
       packages-apps
       packages-school

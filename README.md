@@ -144,10 +144,71 @@ out-links (old results roll out via the weekly 30-day GC). The night timer
 3. Rebuild the server (remotely fine: `ssh server@t490s`, then `nxswitch`).
 4. Import `build-client` in the client's host file and switch it.
 
+### Hermes agent
+
+[Hermes](https://hermes-agent.nousresearch.com) (Nous Research's agent) runs
+in Docker on t490s-server: a long-lived gateway (Telegram-ready), the web
+dashboard on **:9119**, a shared `~/nixos` tree, and an SSH back-channel to
+the host for rebuilds. Model: `mimo-v2.6-pro` via your OpenCode Go key.
+
+He edits `modules/` like anyone else — flow is: edit → `nixos-rebuild` over
+SSH → push. `approvals.mode: smart` makes him escalate sudo/rebuild/push
+commands for your confirmation (in whatever channel you're on); `SOUL.md`
+in `/var/lib/hermes` is his brief, edit it to taste.
+
+**One-time bootstrap** (secrets stay in this file — no sops needed, never in
+the repo or the store):
+
+```bash
+sudo install -d -m 750 /var/lib/hermes
+sudo tee /var/lib/hermes/.env >/dev/null <<'EOF'
+OPENCODE_GO_API_KEY=<key>              # opencode.ai console
+GH_TOKEN=<fine-grained PAT>            # contents:write on Pebor/nixos (push only)
+HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin
+HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=<pick one>
+HERMES_DASHBOARD_BASIC_AUTH_SECRET=<openssl rand -base64 32>
+# optional, for Telegram — or use "Create with QR" in the dashboard later:
+# TELEGRAM_BOT_TOKEN=
+# TELEGRAM_ALLOWED_USERS=
+EOF
+sudo chmod 600 /var/lib/hermes/.env
+```
+
+Then switch (remotely fine) and verify:
+
+```bash
+ssh server@t490s 'cd ~/nixos && sudo nixos-rebuild switch --flake .#t490s-server'
+curl -s http://t490s:9119/api/status | jq '.auth_required, .auth_providers'
+# -> true, ["basic"]   (the container refuses to start without the .env above)
+```
+
+**Talking to him**
+
+- Terminal, from any machine: `hermes` (Home Manager wrapper that ssh-es to
+  the server; `HERMES_SSH_DEST=...` overrides the target). On the server
+  itself `hermes` runs him locally via `docker exec`. Full CLI: `hermes chat`,
+  `hermes config set …`, `hermes pairing approve …`.
+- Browser: `http://t490s:9119` over the tailnet (dashboard login from the
+  `HERMES_DASHBOARD_BASIC_AUTH_*` lines). Sessions, analytics, config, and
+  a Chat tab. Hermes Desktop can attach to it as a remote gateway too.
+- Telegram: dashboard → *Messaging → Telegram* → **Create with QR** (it makes
+  the bot, writes the token, restarts the gateway), or manually: @BotFather
+  `/newbot`, add `TELEGRAM_BOT_TOKEN` + `TELEGRAM_ALLOWED_USERS=<your id>`
+  to `/var/lib/hermes/.env`, `sudo systemctl restart docker-hermes`. Keep the
+  allowlist (or use DM pairing) — never `GATEWAY_ALLOW_ALL_USERS`; the bot can
+  run commands on the box.
+
+State lives in `/var/lib/hermes` (config, sessions, skills, memory). The
+image is `latest`: `docker pull nousresearch/hermes-agent && sudo systemctl
+restart docker-hermes` to update (`docker restart hermes` is enough after
+editing `/var/lib/hermes/.env` only — hermes re-reads it). `hermes-seed`
+explains itself in the journal if `.env` is missing something
+(`journalctl -u hermes-seed`).
+
 ### Later (deliberately not set up yet)
 
 - `nix.settings.max-jobs = 0` on clients for hard offload (no local builds)
-- nextcloud / hermes / personal projects as docker compose stacks
+- nextcloud / personal projects as docker compose stacks
 - Hetzner reverse proxy / tailscale exit node
 
 ## Notes

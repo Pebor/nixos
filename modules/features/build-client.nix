@@ -14,10 +14,7 @@
     let
       # The server's tailscale IP (tailscale IPs are stable per machine).
       builderIp = "100.103.136.50";
-      # TODO(post-switch): paste contents of cache-key.pub from the server.
-      # (Syntactically valid dummy key; substitution is skipped until the
-      # real key is in.)
-      cachePubKey = "t490s-cache-1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+      cachePubKey = "t490s-cache-1:myatSvZj3oiDANq2cOz8GhEl37gvQjdtA2LJYvB9OHI=";
     in
     {
       nix.distributedBuilds = true;

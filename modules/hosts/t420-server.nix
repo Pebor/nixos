@@ -57,6 +57,7 @@
       fish
 
       packages-terminal
+      hermes-client
       packages-programming
       llm
     ];
