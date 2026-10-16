@@ -40,7 +40,7 @@
 
       # Mirror staging dir (created before the first cache-push).
       systemd.tmpfiles.rules = [
-        "d /home/pebor/cache-warm 0755 pebor users -"
+        "d /home/server/cache-warm 0755 server users -"
       ];
 
       systemd.services.cache-warm = {
@@ -49,7 +49,7 @@
         wants = [ "network-online.target" ];
         serviceConfig = {
           Type = "oneshot";
-          User = "pebor";
+          User = "server";
           Group = "users";
           ExecStart = lib.getExe cacheWarm;
           # Builds can take far longer than the default 90s start timeout.

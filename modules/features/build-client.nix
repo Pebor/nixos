@@ -12,9 +12,8 @@
   flake.modules.nixos.build-client =
     { pkgs, ... }:
     let
-      # TODO(post-switch): replace with the server's tailscale IP.
-      # (Syntactically valid placeholder so evaluation doesn't break.)
-      builderIp = "100.64.0.0";
+      # The server's tailscale IP (tailscale IPs are stable per machine).
+      builderIp = "100.103.136.50";
       # TODO(post-switch): paste contents of cache-key.pub from the server.
       # (Syntactically valid dummy key; substitution is skipped until the
       # real key is in.)
@@ -60,10 +59,10 @@
           text = ''
             set -euo pipefail
             rsync -a --delete --exclude=.git "$HOME/nixos/" \
-              pebor@t490s:cache-warm/nixos/
+              server@t490s:cache-warm/nixos/
             echo "nixos tree mirrored to t490s:~/cache-warm/nixos"
             if [ "''${1:-}" = "--now" ]; then
-              ssh pebor@t490s cache-warm
+              ssh server@t490s cache-warm
             else
               echo "queued for the next cache-warm run (or: cache-push --now)"
             fi

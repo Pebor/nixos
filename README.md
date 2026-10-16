@@ -54,6 +54,10 @@ desktop one (`t490s`). Same hardware file, no reinstall. It offloads nix
 builds from other machines (distributed builds) and serves its store as a
 binary cache (harmonia) over tailscale; docker is ready for compose stacks.
 
+The working account on the server is **`server`** (SSH key-only, passwordless
+wheel sudo). The old `pebor` account has no remote access there; its files in
+`/home/pebor` are archived as-is until you feel like cleaning them up.
+
 ### Switching the laptop over (first time)
 
 On the t490s, lid open:
@@ -72,12 +76,23 @@ the cache and wire the clients:
 tailscale status
 
 # 2. one-time harmonia signing key
-sudo install -d /var/lib/harmonia
+sudo install -d -m 755 /var/lib/harmonia
 sudo nix-store --generate-binary-cache-key t490s-cache-1 \
   /var/lib/harmonia/cache-key.pem /var/lib/harmonia/cache-key.pub
+sudo chmod 600 /var/lib/harmonia/cache-key.pem
 sudo systemctl restart harmonia.service
 cat /var/lib/harmonia/cache-key.pub
+
+# 3. repo + first Home Manager switch for the server user
+sudo cp -a /home/pebor/nixos /home/server/nixos
+sudo chown -R server:users /home/server/nixos
+# then from a client: ssh server@t490s, and in that session:
+nh home switch ~/nixos -c server@t490s-server
+# afterwards hmswitch/nxswitch aliases work (they point at the server attrs)
 ```
+
+The `server` user's `~/nixos` is a plain clone of the public GitHub repo —
+anonymous `git pull` works, no credentials needed.
 
 Back on the t14, fill `builderIp` (tailscale IP) and `cachePubKey` (the .pub
 contents) into `modules/features/build-client.nix`, and move the nixbuild
@@ -126,7 +141,7 @@ out-links (old results roll out via the weekly 30-day GC). The night timer
 1. On the client: `sudo ssh-keygen -t ed25519 -N "" -C "nixbuild@<host>" -f /root/.ssh/nixbuild_ed25519`
 2. Append the .pub to `nixbuild`'s keys in `modules/features/build-worker.nix`
    (keep the `restrict` prefix).
-3. Rebuild the server (remotely fine: `ssh pebor@t490s`, then `nxswitch`).
+3. Rebuild the server (remotely fine: `ssh server@t490s`, then `nxswitch`).
 4. Import `build-client` in the client's host file and switch it.
 
 ### Later (deliberately not set up yet)

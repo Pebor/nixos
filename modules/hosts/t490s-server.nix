@@ -20,7 +20,7 @@
     ];
   };
 
-  flake.homeConfigurations."pebor@t490s-server" = inputs.home-manager.lib.homeManagerConfiguration {
+  flake.homeConfigurations."server@t490s-server" = inputs.home-manager.lib.homeManagerConfiguration {
     pkgs = inputs.nixpkgs-hm.legacyPackages.x86_64-linux;
     extraSpecialArgs = { inherit inputs; };
     modules = [
@@ -28,7 +28,7 @@
     ];
   };
 
-  flake.modules.nixos.host-t490s-server = { ... }: {
+  flake.modules.nixos.host-t490s-server = { pkgs, ... }: {
     imports = [
       inputs.determinate.nixosModules.default
     ] ++ (with inputs.self.modules.nixos; [
@@ -55,10 +55,22 @@
     # daemon manage the CPU.
     services.thermald.enable = true;
 
-    # SSH access as pebor (t14's key). ssh-server disables password auth.
-    users.users.pebor.openssh.authorizedKeys.keys = [
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID9MgNcjaXCtMnyhVwsb45h5cmnrLYQGTiBDY1WRXpMi pebor@nixos"
-    ];
+    # The server's working account (t14's key; ssh-server disables password
+    # auth). pebor stays defined via base/user.nix only as the owner of the
+    # archived pre-server files in /home/pebor — no remote access.
+    users.users.server = {
+      isNormalUser = true;
+      shell = pkgs.fish;
+      description = "server";
+      extraGroups = [ "wheel" "docker" "networkmanager" ];
+      openssh.authorizedKeys.keys = [
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID9MgNcjaXCtMnyhVwsb45h5cmnrLYQGTiBDY1WRXpMi pebor@nixos"
+      ];
+    };
+
+    # Key-only SSH box on a private tailnet: passwordless sudo for wheel
+    # keeps remote admin (nxswitch, systemctl) frictionless.
+    security.sudo.wheelNeedsPassword = false;
 
     # Headless server: the lid does nothing and suspend simply does not
     # exist. Close it, plug it in, walk away.
@@ -76,11 +88,18 @@
   flake.modules.homeManager.host-t490s-server = { lib, ... }: {
     imports = with inputs.self.modules.homeManager; [
       nix-settings
-      base
       fish
 
       packages-terminal
     ];
+
+    # home/base.nix contents inlined for the server user (base.nix itself
+    # hardcodes pebor).
+    home.username = "server";
+    home.homeDirectory = "/home/server";
+    home.sessionPath = [ "/home/server/.local/bin" ];
+    home.sessionVariables.EDITOR = "hx";
+    programs.home-manager.enable = true;
 
     home.stateVersion = "24.11";
 
@@ -91,7 +110,7 @@
       nxswitch = lib.mkForce "nh os switch -H t490s-server ~/nixos";
       nxedit = lib.mkForce "hx ~/nixos/modules/hosts/t490s-server.nix";
       nxeswitch = lib.mkForce "hx ~/nixos/modules/hosts/t490s-server.nix && nh os switch -H t490s-server ~/nixos";
-      hmswitch = lib.mkForce "nh home switch -c pebor@t490s-server ~/nixos";
+      hmswitch = lib.mkForce "nh home switch -c server@t490s-server ~/nixos";
     };
   };
 }
