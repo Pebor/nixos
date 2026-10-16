@@ -171,6 +171,15 @@
             ssh-keygen -q -t ed25519 -N "" -C "hermes@t490s" -f ${stateDir}/home/.ssh/id_ed25519
           fi
 
+          # This unit runs as root, so `install`/`ssh-keygen` above create
+          # root-owned files the container's hermes user cannot read (SOUL.md
+          # breaks `hermes doctor` and silently drops the persona). Hand the
+          # seeded state to the container user on every boot — unconditional,
+          # so already-broken files self-heal.
+          chown "$uid":"$gid" \
+            ${stateDir}/config.yaml ${stateDir}/SOUL.md ${stateDir}/home/.gitconfig \
+            ${stateDir}/home/.ssh/config ${stateDir}/home/.ssh/id_ed25519 ${stateDir}/home/.ssh/id_ed25519.pub
+
           # Host access for rebuilds: hermes logs in as `server` (passwordless sudo).
           install -d -m 0700 -o server -g "$gid" /home/server/.ssh
           touch /home/server/.ssh/authorized_keys
