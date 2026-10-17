@@ -9,10 +9,11 @@
 #
 # `hermes` on the server talks to him via docker exec; `hermes-client` (Home
 # Manager, imported by the other hosts) wraps the same call over SSH so every
-# machine can reach him with the same command. Interactive access from those
-# hosts attaches to the persistent `hermes` zellij session (unlock-first
-# keybinds, seeded in host-t490s-server's Home Manager config) via
-# `hermes-zellij`, so the TUI survives detaches and follows you around.
+# machine can reach him with the same command. Bare `hermes` launches the Ink
+# TUI (display.interface: tui). `hermes-zellij` remains as an opt-in for a
+# persistent zellij-managed session (unlock-first keybinds, seeded in
+# host-t490s-server's Home Manager config) — zellij is never launched
+# implicitly; open it yourself and run `hermes` in a pane for multitasking.
 { inputs, ... }:
 {
   flake.modules.nixos.hermes =
@@ -26,6 +27,9 @@
         model:
           provider: opencode-go
           default: mimo-v2.6-pro
+
+        display:
+          interface: tui
 
         approvals:
           mode: smart
@@ -140,10 +144,20 @@
       # The generated unit is Restart=on-failure; a gateway is meant to be up.
       systemd.services.docker-hermes.serviceConfig.Restart = lib.mkForce "always";
 
+      # Requisite (not Requires) on the seed: still fail-closed at boot —
+      # the container refuses to start while hermes-seed is inactive (its
+      # secrets check refuses), but a later hermes-seed restart no longer
+      # cascades into stopping the running container. Requires= did exactly
+      # that: every rebuild touching the seed script bounced the container
+      # and killed the agent's live session.
+      systemd.services.docker-hermes.unitConfig.Requisite = [ "hermes-seed.service" ];
+
       systemd.services.hermes-seed = {
         description = "Provision hermes state, config and host access";
         before = [ "docker-hermes.service" ];
-        requiredBy = [ "docker-hermes.service" ];
+        # Started at boot on its own (NOT pulled in by docker-hermes' old
+        # Requires= — see the Requisite note below).
+        wantedBy = [ "multi-user.target" ];
         path = [ pkgs.openssh ];
         serviceConfig = {
           Type = "oneshot";
@@ -227,13 +241,11 @@
         name = "hermes";
         runtimeInputs = [ pkgs.openssh ];
         text = ''
-          # Same CLI as on the t490s-server, reached over SSH. An interactive
-          # bare `hermes` attaches to the persistent `hermes` zellij session
-          # running the TUI; anything else goes to the plain CLI as before.
+          # Same CLI as on the t490s-server, reached over SSH. Bare `hermes`
+          # launches the TUI there (display.interface: tui); zellij is never
+          # started implicitly. No args = TUI, args = plain CLI passthrough.
           dest="''${HERMES_SSH_DEST:-server@t490s}"
-          if [ -t 0 ] && [ "$#" -eq 0 ]; then
-            exec ssh -t "$dest" hermes-zellij
-          elif [ -t 0 ]; then
+          if [ -t 0 ]; then
             exec ssh -t "$dest" hermes "$@"
           else
             exec ssh "$dest" hermes "$@"
