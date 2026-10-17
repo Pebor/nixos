@@ -213,12 +213,19 @@ explains itself in the journal if `.env` is missing something
   `~/nextcloud/.env` (chmod 600) and `secrets.md`; DB dumps in
   `~/nextcloud/backups/`. Admin user `pebor`. Occ: `docker exec
   nextcloud-app-1 php occ ...`.
-- **Public HTTPS**: `cloud.pebor.me` (Cloudflare DNS-only record ->
-  178.104.163.147) -> Hetzner VPS `lesbian-4gb` (100.117.69.56 on the
+- **Access URLs** (since 2026-10-18): one canonical URL `https://cloud.pebor.me`
+  everywhere; Nextcloud's `overwritehost`/`overwriteprotocol` pin all generated
+  links to it (share links work from anywhere). Two front doors: (a) home/tailnet
+  clients resolve the name to 100.103.136.50 via Tailscale Split DNS (admin
+  console route) -> local Caddy in `~/edge/compose.yaml` (Let's Encrypt DNS-01
+  via a Cloudflare API token in `~/edge/.env`, never committed) + dnsmasq on
+  :53 -> Nextcloud `:8080`; (b) away clients hit the Cloudflare DNS-only
+  record -> 178.104.163.147 -> Hetzner VPS `lesbian-4gb` (100.117.69.56 on the
   tailnet) running Caddy with auto-TLS, reverse-proxying
   `t490s.tail16a6c9.ts.net:8080` over Tailscale. Ports 80/443 open in the
   Hetzner firewall. The fleet has no SSH access to the VPS (sshd closed) -
-  Pebor administers its Caddyfile manually.
+  Pebor administers its Caddyfile manually (it carries the same HSTS header and
+  CalDAV-discovery redir as `~/edge`).
 - Super Productivity syncs through Nextcloud WebDAV; Hermes integrates via
   the `nextcloud-sp` skill (WebDAV reads, CalDAV `hermes` bridge for writes).
 - Other compose stacks on the host: `sp1-team-karate` (postgres, up),
