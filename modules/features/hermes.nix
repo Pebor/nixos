@@ -10,10 +10,8 @@
 # `hermes` on the server talks to him via docker exec; `hermes-client` (Home
 # Manager, imported by the other hosts) wraps the same call over SSH so every
 # machine can reach him with the same command. Bare `hermes` launches the Ink
-# TUI (display.interface: tui). `hermes-zellij` remains as an opt-in for a
-# persistent zellij-managed session (unlock-first keybinds, seeded in
-# host-t490s-server's Home Manager config) — zellij is never launched
-# implicitly; open it yourself and run `hermes` in a pane for multitasking.
+# TUI (display.interface: tui). zellij is never involved: Pebor opens it
+# himself and runs `hermes` in a pane for multitasking.
 { inputs, ... }:
 {
   flake.modules.nixos.hermes =
@@ -103,16 +101,6 @@
         '';
       };
 
-      # Interactive access from any machine: create-or-attach to the
-      # persistent `hermes` zellij session whose first pane runs the TUI, so
-      # the session survives detaches and follows you across machines.
-      # zellij comes from the user profile (home/packages-terminal.nix).
-      hermes-zellij = pkgs.writeShellApplication {
-        name = "hermes-zellij";
-        text = ''
-          exec zellij attach -c hermes -- hermes --tui
-        '';
-      };
     in
     {
       virtualisation.oci-containers.backend = "docker";
@@ -139,7 +127,7 @@
         ];
       };
 
-      environment.systemPackages = [ hermes hermes-zellij ];
+      environment.systemPackages = [ hermes ];
 
       # The generated unit is Restart=on-failure; a gateway is meant to be up.
       systemd.services.docker-hermes.serviceConfig.Restart = lib.mkForce "always";
