@@ -205,11 +205,31 @@ editing `/var/lib/hermes/.env` only — hermes re-reads it). `hermes-seed`
 explains itself in the journal if `.env` is missing something
 (`journalctl -u hermes-seed`).
 
+### Nextcloud & public services (live since 2026-10-17)
+
+- **Nextcloud** (35.x) as a docker compose stack at `~/nextcloud/` on
+  t490s-server: `nextcloud:latest` (digest-pinned) + MariaDB LTS + Redis +
+  cron sidecar. Data at `/var/lib/nextcloud/{html,db}`; secrets in
+  `~/nextcloud/.env` (chmod 600) and `secrets.md`; DB dumps in
+  `~/nextcloud/backups/`. Admin user `pebor`. Occ: `docker exec
+  nextcloud-app-1 php occ ...`.
+- **Public HTTPS**: `cloud.pebor.me` (Cloudflare DNS-only record ->
+  178.104.163.147) -> Hetzner VPS `lesbian-4gb` (100.117.69.56 on the
+  tailnet) running Caddy with auto-TLS, reverse-proxying
+  `t490s.tail16a6c9.ts.net:8080` over Tailscale. Ports 80/443 open in the
+  Hetzner firewall. The fleet has no SSH access to the VPS (sshd closed) -
+  Pebor administers its Caddyfile manually.
+- Super Productivity syncs through Nextcloud WebDAV; Hermes integrates via
+  the `nextcloud-sp` skill (WebDAV reads, CalDAV `hermes` bridge for writes).
+- Other compose stacks on the host: `sp1-team-karate` (postgres, up),
+  example-project `adminer` (up); `server-db` and `semestra-app-db` stopped.
+
 ### Later (deliberately not set up yet)
 
 - `nix.settings.max-jobs = 0` on clients for hard offload (no local builds)
-- nextcloud / personal projects as docker compose stacks
-- Hetzner reverse proxy / tailscale exit node
+- Nextcloud backup automation (nightly DB dump + restic -> VPS) - not wired;
+  only manual dumps in `~/nextcloud/backups/` so far
+- tailscale exit node
 
 ## Notes
 
