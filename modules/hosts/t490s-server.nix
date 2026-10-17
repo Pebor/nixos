@@ -84,6 +84,11 @@
     systemd.targets.suspend.enable = false;
     systemd.targets.hibernate.enable = false;
     systemd.targets.hybrid-sleep.enable = false;
+
+    # Admin tooling (openssl: secret generation for service .env files etc.)
+    environment.systemPackages = with pkgs; [
+      openssl
+    ];
   };
 
   flake.modules.homeManager.host-t490s-server = { lib, ... }: {
