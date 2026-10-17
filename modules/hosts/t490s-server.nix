@@ -34,7 +34,6 @@
     ] ++ (with inputs.self.modules.nixos; [
       nix-settings
       system
-      user
 
       ssh-server
       tailscale
@@ -50,6 +49,11 @@
     networking.hostName = "t490s";
     system.stateVersion = "24.11";
 
+    # Headless console: tty1 auto-logs in as `server` so a local reboot
+    # never dead-ends at a login prompt (real access is key-only ssh).
+    services.getty.autologinUser = "server";
+    programs.fish.enable = true;
+
     services.resolved.enable = true;
     services.fwupd.enable = true;
     # Sustained compile loads with the lid closed: let Intel's thermal
@@ -57,8 +61,9 @@
     services.thermald.enable = true;
 
     # The server's working account (t14's key; ssh-server disables password
-    # auth). pebor stays defined via base/user.nix only as the owner of the
-    # archived pre-server files in /home/pebor — no remote access.
+    # auth). base/user.nix (the pebor account) is deliberately NOT imported
+    # on this host: single-account machine. Rescued files from the old
+    # /home/pebor live in /home/server/pebor-rescue.
     users.users.server = {
       isNormalUser = true;
       shell = pkgs.fish;
