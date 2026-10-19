@@ -165,6 +165,15 @@
         serviceConfig = {
           Type = "oneshot";
           RemainAfterExit = true;
+          # Run as `server` (the container's user) so every file this unit
+          # creates is owned correctly at creation — no chown needed. server
+          # already owns ${stateDir} and /home/server/.ssh.
+          User = "server";
+          Group = "users";
+          # /run/hermes is root:root by default; let systemd create it owned by
+          # server so the unit can write /run/hermes/env.
+          RuntimeDirectory = "hermes";
+          RuntimeDirectoryMode = "0750";
         };
         script = ''
           set -eu
@@ -188,55 +197,33 @@
             ssh-keygen -q -t ed25519 -N "" -C "hermes@t490s" -f ${stateDir}/home/.ssh/id_ed25519
           fi
 
-          # This unit runs as root, so `install`/`ssh-keygen` above create
-          # root-owned files the container's hermes user cannot read (SOUL.md
-          # breaks `hermes doctor` and silently drops the persona). Hand the
-          # seeded state to the container user on every boot — unconditional,
-          # so already-broken files self-heal.
-          chown "$uid":"$gid" \
-            ${stateDir}/config.yaml ${stateDir}/SOUL.md ${stateDir}/home/.gitconfig \
-            ${stateDir}/home/.ssh/config ${stateDir}/home/.ssh/id_ed25519 ${stateDir}/home/.ssh/id_ed25519.pub
 
           # Host access for rebuilds: hermes logs in as `server` (passwordless sudo).
-          install -d -m 0700 -o server -g "$gid" /home/server/.ssh
+          install -d -m 0700 /home/server/.ssh
           touch /home/server/.ssh/authorized_keys
-          chown server:"$gid" /home/server/.ssh/authorized_keys
           chmod 0600 /home/server/.ssh/authorized_keys
           pub=$(cat ${stateDir}/home/.ssh/id_ed25519.pub)
           grep -qF "$pub" /home/server/.ssh/authorized_keys || echo "$pub" >> /home/server/.ssh/authorized_keys
 
-          # Secrets: refuse to start without them. The dashboard basic auth is
-          # NOT optional: image >= 0.22 refuses to bind the dashboard to 0.0.0.0
-          # with no auth provider, and a loopback bind inside the container is
-          # unreachable through docker port forwarding — so without these vars
-          # the dashboard never comes up at all (observed 2026-10-19). Host
-          # publish is 127.0.0.1-only behind `tailscale serve` (tailnet), so
-          # the password is a second layer, not the perimeter.
+          # Validate secrets WARN-ONLY. Never `exit 1`: a missing secret used to
+          # abort the whole nixos-rebuild (status 4), bricking the switch. Log
+          # loudly, let the system activate; fix .env then restart docker-hermes.
           envFile=${stateDir}/.env
           if [ ! -f "$envFile" ]; then
-            echo "hermes-seed: $envFile is missing — create it first (README, 'Hermes agent'):" >&2
-            echo "  sudo install -d -m 750 ${stateDir}" >&2
-            echo "  sudo tee ${stateDir}/.env >/dev/null <<'EOF'  # then chmod 600" >&2
-            echo "  OPENCODE_GO_API_KEY=...          # opencode.ai console" >&2
-            echo "  HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin" >&2
-            echo "  HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=..." >&2
-            echo "  HERMES_DASHBOARD_BASIC_AUTH_SECRET=\$(openssl rand -base64 32)" >&2
-            echo "  EOF" >&2
-            exit 1
+            echo "hermes-seed: WARNING $envFile missing — container will not start. Create it, then: sudo systemctl restart docker-hermes" >&2
+          else
+            for v in \
+              OPENCODE_GO_API_KEY \
+              HERMES_DASHBOARD_BASIC_AUTH_USERNAME \
+              HERMES_DASHBOARD_BASIC_AUTH_PASSWORD \
+              HERMES_DASHBOARD_BASIC_AUTH_SECRET
+            do
+              grep -q "^$v=." "$envFile" \
+                || echo "hermes-seed: WARNING $v missing/empty in $envFile" >&2
+            done
+            grep -q '^GH_TOKEN=.' "$envFile" \
+              || echo "hermes-seed: WARNING GH_TOKEN missing — git push will fail" >&2
           fi
-          for v in \
-            OPENCODE_GO_API_KEY \
-            HERMES_DASHBOARD_BASIC_AUTH_USERNAME \
-            HERMES_DASHBOARD_BASIC_AUTH_PASSWORD \
-            HERMES_DASHBOARD_BASIC_AUTH_SECRET
-          do
-            grep -q "^$v=." "$envFile" || {
-              echo "hermes-seed: $v is missing or empty in $envFile" >&2
-              exit 1
-            }
-          done
-          grep -q '^GH_TOKEN=.' "$envFile" \
-            || echo "hermes-seed: warning: GH_TOKEN missing — git push will fail" >&2
         '';
       };
     };
