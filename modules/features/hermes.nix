@@ -63,9 +63,15 @@
         3. Only when it works: `git -C /home/server/nixos add -A && git -C /home/server/nixos commit && git -C /home/server/nixos push`
 
         ## Rules of engagement
-        - Ask before rebuilding, pushing, or touching anything outside
-          /home/server/nixos — the approval system will prompt you too; wait
-          for the human's answer.
+        Three tiers of autonomy:
+        - Inside the container: never ask — just do it and report.
+        - t490s host, regular ops (nixos rebuilds, service restarts,
+          reboots, flake commit/push): no approval needed — announce in
+          chat what you're about to do first, then do it.
+        - Anything outside t490s (other machines, external services,
+          effects beyond this host): ask first and wait for approval.
+          Approvals are per-request, never standing — re-ask unless he
+          explicitly granted it.
         - Never force-push. Never read or exfiltrate secrets (`/var/lib/hermes/.env`,
           ssh keys, tokens).
         - Prefer small, reviewable changes and explain them in plain words.
@@ -107,8 +113,17 @@
 
       virtualisation.oci-containers.containers.hermes = {
         image = "nousresearch/hermes-agent:latest";
-        cmd = [ "gateway" "run" ];
-        ports = [ "9119:9119" ];
+        # NOT "gateway run": image >= 0.22 supervises the gateway itself —
+        # cont-init.d/02-reconcile-profiles auto-starts it as an s6 service
+        # (desired_state=running persists in ${stateDir}/gateway_state.json).
+        # A `gateway run` CMD then finds that gateway already running, exits 0,
+        # s6 takes the whole container down and systemd restarts it — the
+        # 2026-10-19 restart loop. The CMD only has to stay alive.
+        cmd = [ "sleep" "infinity" ];
+        # Localhost only: the sole way in is `tailscale serve` (tailnet) on
+        # :8444. Never publish this port publicly — tailnet + dashboard basic
+        # auth are the perimeter (see the NOTE in the hermes-seed check below).
+        ports = [ "127.0.0.1:9119:9119" ];
         volumes = [
           "${stateDir}:/opt/data"
           "/home/server/nixos:/home/server/nixos"
@@ -121,8 +136,8 @@
           "${stateDir}/.env"
         ];
         extraOptions = [
-          "--memory=4g"
-          "--cpus=2"
+          "--memory=8g"
+          "--cpus=6"
           "--add-host=host.docker.internal:host-gateway"
         ];
       };
@@ -190,15 +205,19 @@
           pub=$(cat ${stateDir}/home/.ssh/id_ed25519.pub)
           grep -qF "$pub" /home/server/.ssh/authorized_keys || echo "$pub" >> /home/server/.ssh/authorized_keys
 
-          # Secrets: refuse to start without them (an unauthenticated dashboard
-          # on a public bind s6-restart-loops at 100% CPU — fail closed here).
+          # Secrets: refuse to start without them. The dashboard basic auth is
+          # NOT optional: image >= 0.22 refuses to bind the dashboard to 0.0.0.0
+          # with no auth provider, and a loopback bind inside the container is
+          # unreachable through docker port forwarding — so without these vars
+          # the dashboard never comes up at all (observed 2026-10-19). Host
+          # publish is 127.0.0.1-only behind `tailscale serve` (tailnet), so
+          # the password is a second layer, not the perimeter.
           envFile=${stateDir}/.env
           if [ ! -f "$envFile" ]; then
             echo "hermes-seed: $envFile is missing — create it first (README, 'Hermes agent'):" >&2
             echo "  sudo install -d -m 750 ${stateDir}" >&2
             echo "  sudo tee ${stateDir}/.env >/dev/null <<'EOF'  # then chmod 600" >&2
             echo "  OPENCODE_GO_API_KEY=...          # opencode.ai console" >&2
-            echo "  GH_TOKEN=...                     # fine-grained PAT, contents:write" >&2
             echo "  HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin" >&2
             echo "  HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=..." >&2
             echo "  HERMES_DASHBOARD_BASIC_AUTH_SECRET=\$(openssl rand -base64 32)" >&2
