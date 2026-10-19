@@ -131,9 +131,14 @@
         environment = {
           HERMES_DASHBOARD = "1";
         };
+        # environmentFiles are read by the docker daemon ON THE HOST — every
+        # entry must be a host path. (An in-container path here makes docker
+        # refuse to start the container: "failed to load env file", and the
+        # hermes wrapper then fails every call with no visible error.)
         environmentFiles = [
           "/run/hermes/env"
           "${stateDir}/.env"
+          "${stateDir}/secrets.env"
         ];
         extraOptions = [
           "--memory=8g"
@@ -154,6 +159,16 @@
       # that: every rebuild touching the seed script bounced the container
       # and killed the agent's live session.
       systemd.services.docker-hermes.unitConfig.Requisite = [ "hermes-seed.service" ];
+
+      # Two-file secrets model (declarative ownership, no chown in bash):
+      #   secrets.env = user's keys, root-owned 440, never touched by tooling
+      #   .env        = hermes tooling config, server-owned 600
+      systemd.tmpfiles.rules = [
+        "d ${stateDir} 0750 server users -"
+        "d ${stateDir}/home 0750 server users -"
+        "f ${stateDir}/.env 0600 server users -"
+        "f ${stateDir}/secrets.env 0440 root users -"
+      ];
 
       systemd.services.hermes-seed = {
         description = "Provision hermes state, config and host access";
@@ -208,7 +223,7 @@
           # Validate secrets WARN-ONLY. Never `exit 1`: a missing secret used to
           # abort the whole nixos-rebuild (status 4), bricking the switch. Log
           # loudly, let the system activate; fix .env then restart docker-hermes.
-          envFile=${stateDir}/.env
+          envFile=${stateDir}/secrets.env
           if [ ! -f "$envFile" ]; then
             echo "hermes-seed: WARNING $envFile missing — container will not start. Create it, then: sudo systemctl restart docker-hermes" >&2
           else
