@@ -220,6 +220,32 @@
           pub=$(cat ${stateDir}/home/.ssh/id_ed25519.pub)
           grep -qF "$pub" /home/server/.ssh/authorized_keys || echo "$pub" >> /home/server/.ssh/authorized_keys
 
+          # GAP-RESTORE (the fix that makes secrets survive rebuilds):
+          # hermes resolves API keys from $HERMES_HOME/.env as a FILE, so every
+          # secret must be PRESENT in .env — env-var injection is not enough.
+          # secrets.env is the read-only master (root:users 440). Before the
+          # container starts, copy any key from secrets.env into .env ONLY if
+          # it's missing/empty there — never overwrite an existing value (so an
+          # old version can't come back). If a secret ever vanishes, the next
+          # rebuild self-heals it.
+          master=${stateDir}/secrets.env
+          target=${stateDir}/.env
+          if [ -f "$master" ]; then
+            touch "$target" 2>/dev/null || true
+            # For each KEY in master, if target lacks KEY=<nonempty>, append it.
+            while IFS= read -r mline; do
+              case "$mline" in
+                [A-Za-z_]*=*)
+                  mkey="${mline%%=*}"
+                  grep -q "^$mkey=." "$target" 2>/dev/null || printf '%s\n' "$mline" >> "$target"
+                  ;;
+              esac
+            done < "$master"
+            echo "hermes-seed: gap-restore from secrets.env complete"
+          else
+            echo "hermes-seed: WARNING $master missing — secrets will not self-heal" >&2
+          fi
+
           # Validate secrets WARN-ONLY. Never `exit 1`: a missing secret used to
           # abort the whole nixos-rebuild (status 4), bricking the switch. Log
           # loudly, let the system activate; fix .env then restart docker-hermes.
