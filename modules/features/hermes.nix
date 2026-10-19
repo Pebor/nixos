@@ -236,8 +236,12 @@
             while IFS= read -r mline; do
               case "$mline" in
                 [A-Za-z_]*=*)
-                  mkey="${mline%%=*}"
-                  grep -q "^$mkey=." "$target" 2>/dev/null || printf '%s\n' "$mline" >> "$target"
+                  mkey="''${mline%%=*}"
+                  mval="''${mline#*=}"
+                  [ -n "$mval" ] || continue
+                  grep -q "^$mkey=." "$target" 2>/dev/null && continue
+                  sed -i "/^$mkey=/d" "$target" 2>/dev/null || true
+                  printf '%s\n' "$mline" >> "$target"
                   ;;
               esac
             done < "$master"
