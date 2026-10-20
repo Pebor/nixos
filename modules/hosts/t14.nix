@@ -50,6 +50,9 @@
       nix-ld
       oomd
       zram
+
+      ssh-server
+      hermes-access
     ]);
 
     boot.kernelParams = [
