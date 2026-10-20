@@ -38,6 +38,7 @@
       ssh-server
       tailscale
       oomd
+      zram
 
       docker
       hermes

@@ -29,10 +29,6 @@
     # Lets nixbuild pass substituter/options through the build connection.
     nix.settings.trusted-users = [ "nixbuild" ];
 
-    # The t490s has no swap (see hardware/t490s.nix); 16 GB RAM under
-    # parallel compile jobs needs headroom.
-    zramSwap.enable = true;
-
     # Conservative GC for a cache host: cached build results stay useful for
     # a month; GC-rooted paths (cache-warm out-links, system profiles) are
     # never touched regardless.

@@ -6,7 +6,8 @@
 # Install-time usage from the NixOS ISO (WIPES THE DISK):
 #   sudo nix run github:nix-community/disko/latest -- --mode disko ~/nixos/hardware/t14-disko.nix
 #
-# 512 GB SSD: 1G ESP + 16G swap (== RAM, hibernation-ready) + btrfs rest.
+# 512 GB SSD: 1G ESP + 16G swap (overflow only; RAM is 24G since 2026-10,
+# hibernation unused - zram covers bursts, see modules/features/zram.nix) + btrfs rest.
 {
   disko.devices.disk.main = {
     # Verify with `lsblk` on the machine before running disko!
@@ -30,7 +31,8 @@
           content = {
             type = "swap";
             discardPolicy = "both";
-            resumeDevice = true; # sets boot.resumeDevice for hibernation
+            resumeDevice = true; # sets boot.resumeDevice (hibernation not viable:
+            # swap 16G < RAM 24G - harmless to keep, layout untouched)
           };
         };
         root = {

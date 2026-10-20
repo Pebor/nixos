@@ -49,6 +49,7 @@
       build-client
       nix-ld
       oomd
+      zram
     ]);
 
     boot.kernelParams = [
