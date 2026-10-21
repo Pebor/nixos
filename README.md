@@ -238,8 +238,10 @@ explains itself in the journal if `.env` is missing something
 
 - `nix.settings.max-jobs = 0` on clients for hard offload (no local builds)
 - Nextcloud backup automation - LOCAL half wired 2026-10-21, inside the compose
-  stack (`~/nextcloud/backup/`, crond at 03:30): all-databases dump + html
-  tarball + config/secrets bundle, retention 14 d / 3 daily + 4 weekly / 14 d,
+  stack (`~/nextcloud/backup/`, crond at 03:30): all-databases dump + user-data
+  tarball (html/{data,config,themes} only - code comes from the pinned image) +
+  config/secrets bundle with an app manifest, retention 14 d / 7 daily + 4
+  weekly / 14 d (~83 MB per night),
   log at `~/nextcloud/backups/backup.log`. Restore verified (0 import errors,
   table/row counts identical). Deliberately NOT in this flake: the stack is
   compose-managed, so its backups live with it. Offsite restic -> VPS is still
