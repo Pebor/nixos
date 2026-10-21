@@ -43,6 +43,7 @@
 
       docker
       hermes
+      hermes-secrets-sync
       build-worker
       harmonia
       cache-warm
