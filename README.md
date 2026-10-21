@@ -228,8 +228,11 @@ explains itself in the journal if `.env` is missing something
   CalDAV-discovery redir as `~/edge`).
 - Super Productivity syncs through Nextcloud WebDAV; Hermes integrates via
   the `nextcloud-sp` skill (WebDAV reads, CalDAV `hermes` bridge for writes).
-- Other compose stacks on the host: `sp1-team-karate` (postgres, up),
-  example-project `adminer` (up); `server-db` and `semestra-app-db` stopped.
+- Other compose stacks on the host: none active. `sp1-team-karate` (postgres),
+  example-project `adminer`, `server-db` and `semestra-app-db` were all removed
+  2026-10-21: leftovers from manual `docker run` experiments, no compose file on
+  disk, no traffic since 2026-10-17, no service referencing them. Their images
+  and volumes were pruned the same day (~5 GB reclaimed).
 
 ### Later (deliberately not set up yet)
 
