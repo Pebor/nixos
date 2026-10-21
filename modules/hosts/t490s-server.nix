@@ -95,6 +95,7 @@
     # Admin tooling (openssl: secret generation for service .env files etc.)
     environment.systemPackages = with pkgs; [
       openssl
+      bitwarden-cli   # bw: service-vault secrets (see the vaultwarden card)
     ];
   };
 
