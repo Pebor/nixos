@@ -193,6 +193,7 @@
       base
       fish
       hyprland
+      activity-monitor
       stylix
 
       packages-terminal

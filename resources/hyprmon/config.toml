@@ -1,0 +1,62 @@
+# hyprmon configuration (managed in ~/nixos — this file is symlinked to
+# ~/.config/hyprmon/config.toml by modules/features/activity-monitor.nix).
+#
+# Every key is optional. Top-level keys must come before any [table] or
+# [[array]] header in TOML.
+
+# Where the daily store files (events-YYYY-MM-DD.jsonl.gz) are written.
+# The directory is created with mode 0700 on first write.
+store_dir = "~/.local/share/hyprmon"
+
+# Files older than this many days are deleted at startup and at midnight.
+retention_days = 14
+
+# Battery sysfs directory. Set to a different path if your battery is not BAT0.
+battery_path = "/sys/class/power_supply/BAT0"
+
+# Persist the raw SSID alongside the label. Off by default: only the label is
+# stored. Raw SSIDs are location data (see the research report) — keep off
+# unless you have a reason.
+store_raw_ssid = false
+
+# Media titles that browsers show instead of the real title for private-window
+# media. When one of these is seen, only the playback status is stored.
+media_placeholder_titles = ["Zen is playing media", "Firefox is playing media"]
+
+# Map Wi-Fi SSIDs to labels. Unmapped SSIDs are stored as "other".
+# Add your networks here, e.g.:
+#   "MyHomeWiFi" = "home"
+#   "eduroam"    = "school"
+[wifi_labels]
+
+# Censor rules, evaluated when a focus span closes, before anything is written.
+# A rule matches when every matcher it sets matches (match_title AND match_class).
+# The first matching rule wins.
+#   action = "drop"    : the span is never persisted.
+#   action = "redact"  : the span is stored with its title replaced by `replacement`.
+# Regexes use Python `re.search`; anchor with ^ and $ as needed.
+#
+# If this file has no [[censor]] entries, the two rules below are used as
+# built-in defaults. Write `censor = []` at the top level to disable censoring
+# (not recommended).
+
+# Firefox/Zen private windows end their title with the browser name plus
+# "Private Browsing" (verified live on Zen beta: "... — Zen Browser Private
+# Browsing"). Dropped regardless of which window is focused.
+[[censor]]
+match_title = '.*Private Browsing$|.*Anonymní prohlížení$'
+action = "drop"
+
+# Zen (beta) and Helium incognito windows whose title contains "Incognito" or
+# "Private" (belt-and-braces for the Chromium side, where the title marker is
+# not guaranteed).
+[[censor]]
+match_class = 'zen-beta|helium'
+match_title = 'Incognito|Private'
+action = "drop"
+
+# Example of a redaction rule: keep the span and its duration, hide the title.
+# [[censor]]
+# match_class = '^org\.keepassxc\.KeePassXC$'
+# action = "redact"
+# replacement = "[password manager]"

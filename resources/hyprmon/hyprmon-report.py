@@ -1,0 +1,1050 @@
+#!/usr/bin/env python3
+"""hyprmon-report: turn hyprmon event stores into aggregates.json + report.html.
+
+Python 3.11+ standard library only. The HTML report is fully self-contained
+(inline CSS and hand-rolled inline SVG, no scripts, no external resources).
+
+Usage examples:
+    hyprmon-report.py --day 2026-10-21
+    hyprmon-report.py --week 2026-10-21
+    hyprmon-report.py --from 2026-10-01 --to 2026-10-21 --out ./rep
+    hyprmon-report.py --input ~/.local/share/hyprmon/ --tz Europe/Prague
+
+See README.md for the data model, category config and design decisions.
+"""
+from __future__ import annotations
+
+import argparse
+import bisect
+import collections
+import dataclasses
+import datetime as dt
+import gzip
+import html
+import json
+import math
+import os
+import re
+import sys
+import tomllib
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+VERSION = 1
+ONE_DAY = dt.timedelta(days=1)
+DEFAULT_INPUT = "~/.local/share/hyprmon/"
+DEFAULT_CONFIG = "~/.config/hyprmon/config.toml"
+DEFAULT_OUT = "./hyprmon-report-out"
+DEFAULT_MEDIA_MAX_GAP_MIN = 30.0
+DEFAULT_LOOKBACK_DAYS = 1
+HEATMAP_FULL_MINUTES = 60.0  # heatmap intensity 1.0 == 60 active minutes in an hour
+
+# Seed category rules. Each entry is one regex; a category matches when any of
+# its regexes matches 'class|title' (case-insensitive, re.search). Categories
+# are tried in order, first match wins, unmatched spans fall back to 'other'.
+# A [categories] table in the config file REPLACES these seeds entirely.
+SEED_CATEGORIES = {
+    "school": [
+        "jetbrains-idea", "bludiště", r"\bOC\b", "prolog", "stack", "xournal",
+        "rnote", "anki", "teams-for-linux", "moodle", "overleaf",
+    ],
+    "dev": ["foot", "code", "helix", r"\bhx\b", "docker", "git"],
+    "media": ["youtube", r"\bmpv\b", "spotify", "spotifast", r"\(\d+\).*YouTube"],
+    "messaging": ["telegram", "discord", "signal"],
+}
+FALLBACK_CATEGORY = "other"
+
+CAT_COLORS = {
+    "school": "#4e79a7", "dev": "#59a14f", "media": "#e15759",
+    "messaging": "#b07aa1", "other": "#bab0ac",
+}
+EXTRA_COLORS = ["#f28e2b", "#76b7b2", "#edc948", "#ff9da7", "#9c755f", "#86bcb6", "#d37295"]
+WIFI_COLORS = ["#8dd3c7", "#ffffb3", "#bebada", "#fb8072", "#80b1d3", "#fdb462", "#b3de69", "#fccde5"]
+MEDIA_COLOR = "#e15759"
+ACTIVE_COLOR = "#4e79a7"
+IDLE_COLOR = "#e6e6e6"
+AFK_COLOR = "#9a9a9a"
+LOCK_COLOR = "#333333"
+
+FILE_RE = re.compile(r"^events-(\d{4}-\d{2}-\d{2})\.jsonl(\.gz)?$")
+
+
+class UsageError(Exception):
+    """Bad CLI usage or unusable input; reported without a traceback."""
+
+
+class ConfigError(UsageError):
+    """Bad config file content."""
+
+
+@dataclasses.dataclass
+class Span:
+    start: float
+    end: float
+    cat: str
+    app: str
+    idle: bool
+    open_: bool = False
+
+
+# --------------------------------------------------------------------------
+# time helpers
+# --------------------------------------------------------------------------
+
+def parse_date(text: str) -> dt.date:
+    try:
+        return dt.datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        raise UsageError(f"not a YYYY-MM-DD date: {text!r}")
+
+
+def day_epoch(d: dt.date, tz) -> float:
+    """Epoch seconds of local midnight at the start of date d."""
+    return dt.datetime(d.year, d.month, d.day, tzinfo=tz).timestamp()
+
+
+def hour_pieces(a: float, b: float, tz):
+    """Split [a, b) at local hour boundaries. Yields (local_date, hour, p0, p1).
+
+    Hour boundaries are found from the local wall clock, so this stays correct
+    across DST changes (a 23h or 25h day simply yields 23 or 25 pieces).
+    """
+    t = a
+    while t < b:
+        d = dt.datetime.fromtimestamp(t, tz)
+        floor = t - (d.minute * 60 + d.second + d.microsecond / 1e6)
+        nxt = min(b, floor + 3600.0)
+        if nxt <= t:  # float guard
+            nxt = b
+        yield d.date(), d.hour, t, nxt
+        t = nxt
+
+
+def local_date_iso(ts: float, tz) -> str:
+    return dt.datetime.fromtimestamp(ts, tz).date().isoformat()
+
+
+def resolve_tz(name):
+    """Return (tzinfo, human-readable name)."""
+    if name:
+        try:
+            return ZoneInfo(name), name
+        except (ZoneInfoNotFoundError, ValueError):
+            raise UsageError(f"unknown IANA timezone: {name!r}")
+    candidates = []
+    env = os.environ.get("TZ", "").lstrip(":")
+    if env:
+        candidates.append(env)
+    try:
+        real = os.path.realpath("/etc/localtime")
+        if "zoneinfo/" in real:
+            candidates.append(real.split("zoneinfo/", 1)[1])
+    except OSError:
+        pass
+    for c in candidates:
+        try:
+            return ZoneInfo(c), c
+        except (ZoneInfoNotFoundError, ValueError):
+            continue
+    now = dt.datetime.now().astimezone()
+    return now.tzinfo, f"fixed offset {now:%z} (no IANA zone found; DST not modelled)"
+
+
+# --------------------------------------------------------------------------
+# config / categories
+# --------------------------------------------------------------------------
+
+def load_categories(path: str, explicit: bool):
+    """Return (compiled, order, source_text, raw_spec)."""
+    if os.path.isfile(path):
+        try:
+            with open(path, "rb") as fh:
+                cfg = tomllib.load(fh)
+        except tomllib.TOMLDecodeError as e:
+            raise ConfigError(f"{path}: invalid TOML: {e}")
+        if "categories" in cfg:
+            raw = cfg["categories"]
+            if not isinstance(raw, dict):
+                raise ConfigError("[categories] must be a table")
+            spec = {}
+            for name, pats in raw.items():
+                if isinstance(pats, str):
+                    pats = [pats]
+                if not isinstance(pats, list) or not all(isinstance(p, str) for p in pats):
+                    raise ConfigError(f"[categories].{name} must be a list of regex strings")
+                spec[name] = pats
+            source = f"config: {path}"
+        else:
+            spec = SEED_CATEGORIES
+            source = f"seed defaults ({path} has no [categories] table)"
+    elif explicit:
+        raise ConfigError(f"config file not found: {path}")
+    else:
+        spec = SEED_CATEGORIES
+        source = "seed defaults (no config file)"
+
+    compiled = []
+    for name, pats in spec.items():
+        rxs = []
+        for p in pats:
+            try:
+                rxs.append(re.compile(p, re.IGNORECASE))
+            except re.error as e:
+                raise ConfigError(f"[categories].{name}: bad regex {p!r}: {e}")
+        compiled.append((name, rxs))
+    order = [n for n, _ in compiled]
+    if FALLBACK_CATEGORY not in order:
+        order.append(FALLBACK_CATEGORY)
+    return compiled, order, source, {n: list(p) for n, p in spec.items()}
+
+
+def classify(cls: str, title: str, compiled) -> str:
+    subject = f"{cls}|{title}"
+    for name, rxs in compiled:
+        for rx in rxs:
+            if rx.search(subject):
+                return name
+    return FALLBACK_CATEGORY
+
+
+# --------------------------------------------------------------------------
+# input discovery and reading
+# --------------------------------------------------------------------------
+
+def scan_days(indir: str):
+    days = set()
+    for name in os.listdir(indir):
+        m = FILE_RE.match(name)
+        if m:
+            try:
+                days.add(parse_date(m.group(1)))
+            except UsageError:
+                pass
+    return sorted(days)
+
+
+def select_files(indir: str, lo: dt.date, hi: dt.date):
+    """Return sorted [(date, path)]. Prefers .jsonl.gz over plain .jsonl per day."""
+    chosen = {}
+    for name in sorted(os.listdir(indir)):
+        m = FILE_RE.match(name)
+        if not m:
+            continue
+        d = parse_date(m.group(1))
+        if not (lo <= d <= hi):
+            continue
+        is_gz = bool(m.group(2))
+        if d not in chosen or (is_gz and not chosen[d][1]):
+            chosen[d] = (os.path.join(indir, name), is_gz)
+    return [(d, chosen[d][0]) for d in sorted(chosen)]
+
+
+def num(x):
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return None
+    return float(x) if math.isfinite(x) else None
+
+
+def read_events(files, health):
+    events = []
+    seen = set()
+    for d, path in files:
+        health["files_read"].append(os.path.basename(path))
+        opener = gzip.open if path.endswith(".gz") else open
+        try:
+            with opener(path, "rt", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except json.JSONDecodeError:
+                        health["malformed_lines"] += 1
+                        continue
+                    if not isinstance(ev, dict):
+                        health["malformed_lines"] += 1
+                        continue
+                    key = json.dumps(ev, sort_keys=True)
+                    if key in seen:
+                        health["duplicate_lines_removed"] += 1
+                        continue
+                    seen.add(key)
+                    events.append(ev)
+        except (OSError, EOFError) as e:
+            health["unreadable_files"].append(f"{os.path.basename(path)}: {e}")
+    return events
+
+
+def merge_intervals(ivs):
+    out = []
+    for a, b in sorted(ivs):
+        if b <= a:
+            continue
+        if out and a <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return [(a, b) for a, b in out]
+
+
+def control_intervals(ctrl, data_end):
+    """ctrl: sorted [(ts, type)] -> (afk_intervals, lock_intervals, open_at_end)."""
+    afk, locked = [], []
+    afk_start = lock_start = None
+    for t, typ in ctrl:
+        if typ == "idle" and afk_start is None:
+            afk_start = t
+        elif typ == "active" and afk_start is not None:
+            afk.append((afk_start, t))
+            afk_start = None
+        elif typ == "lock" and lock_start is None:
+            lock_start = t
+        elif typ == "unlock" and lock_start is not None:
+            locked.append((lock_start, t))
+            lock_start = None
+    open_flags = []
+    if afk_start is not None:
+        open_flags.append("idle")
+        if data_end > afk_start:
+            afk.append((afk_start, data_end))
+    if lock_start is not None:
+        open_flags.append("lock")
+        if data_end > lock_start:
+            locked.append((lock_start, data_end))
+    return afk, locked, open_flags
+
+
+class DayIndex:
+    """Splits intervals into per-local-day pieces for the window days only."""
+
+    def __init__(self, days, tz):
+        self.isos = [d.isoformat() for d in days]
+        self.bounds = [(day_epoch(d, tz), day_epoch(d + ONE_DAY, tz)) for d in days]
+        self.starts = [b[0] for b in self.bounds]
+        self.lo = self.bounds[0][0]
+        self.hi = self.bounds[-1][1]
+
+    def split(self, a, b):
+        a = max(a, self.lo)
+        b = min(b, self.hi)
+        if b <= a:
+            return
+        i = bisect.bisect_right(self.starts, a) - 1
+        while i < len(self.isos) and self.bounds[i][0] < b:
+            ds, de = self.bounds[i]
+            p0, p1 = max(a, ds), min(b, de)
+            if p1 > p0:
+                yield self.isos[i], p0, p1
+            i += 1
+
+
+def merge_segments(segs):
+    """segs: [(p0, p1, kind)] -> merged adjacent same-kind segments."""
+    out = []
+    for p0, p1, kind in sorted(segs, key=lambda s: (s[0], s[1])):
+        if out and out[-1][2] == kind and p0 <= out[-1][1] + 1.0:
+            out[-1][1] = max(out[-1][1], p1)
+        else:
+            out.append([p0, p1, kind])
+    return [tuple(s) for s in out]
+
+
+def pct(part, total):
+    return round(100.0 * part / total, 1) if total > 0 else 0.0
+
+
+def r2(x):
+    return round(x, 2)
+
+
+# --------------------------------------------------------------------------
+# core build
+# --------------------------------------------------------------------------
+
+def new_health(input_dir, tz_name, cat_source):
+    return {
+        "input_dir": input_dir,
+        "timezone": tz_name,
+        "category_source": cat_source,
+        "files_read": [],
+        "unreadable_files": [],
+        "window_days": 0,
+        "window_days_without_event_file": [],
+        "days_with_event_file": 0,
+        "days_with_any_event": 0,
+        "days_with_active_time": 0,
+        "span_records_read": 0,
+        "span_records_in_window": 0,
+        "span_idle_in_window": 0,
+        "span_open_read": 0,
+        "span_invalid": 0,
+        "span_overlaps_in_window": 0,
+        "span_overlap_seconds": 0.0,
+        "span_unclassified_percent_time": 0.0,
+        "span_unclassified_percent_count": 0.0,
+        "media_events": 0,
+        "control_events": 0,
+        "wifi_events": 0,
+        "resources_events": 0,
+        "open_control_states_at_end": [],
+        "unknown_types": {},
+        "malformed_lines": 0,
+        "duplicate_lines_removed": 0,
+        "invalid_events": 0,
+    }
+
+
+def normalize(events, compiled, health):
+    spans, ctrl, media, wifi = [], [], [], []
+    data_ts = []
+    for ev in events:
+        typ = ev.get("type")
+        ts = num(ev.get("ts"))
+        if typ == "span":
+            health["span_records_read"] += 1
+            start = num(ev.get("start_ts"))
+            if start is None:
+                health["span_invalid"] += 1
+                continue
+            end = num(ev.get("end_ts"))
+            is_open = end is None
+            if is_open:
+                health["span_open_read"] += 1
+                end = start  # fixed up after sorting
+            elif end < start:
+                health["span_invalid"] += 1
+                continue
+            cls = str(ev.get("class") or "")
+            title = str(ev.get("title") or "")
+            cat = classify(cls, title, compiled)
+            spans.append(Span(start, end, cat, cls or "(unknown)", bool(ev.get("idle")), is_open))
+            data_ts.append(start)
+            data_ts.append(end)
+        elif typ == "media":
+            health["media_events"] += 1
+            if ts is None:
+                health["invalid_events"] += 1
+                continue
+            media.append((ts, str(ev.get("player") or "unknown"), str(ev.get("status") or "").strip().lower()))
+            data_ts.append(ts)
+        elif typ in ("idle", "active", "lock", "unlock"):
+            health["control_events"] += 1
+            if ts is None:
+                health["invalid_events"] += 1
+                continue
+            ctrl.append((ts, typ))
+            data_ts.append(ts)
+        elif typ == "wifi":
+            health["wifi_events"] += 1
+            if ts is None:
+                health["invalid_events"] += 1
+                continue
+            wifi.append((ts, str(ev.get("label") or "(none)")))
+            data_ts.append(ts)
+        elif typ == "resources":
+            health["resources_events"] += 1
+            if ts is not None:
+                data_ts.append(ts)
+        else:
+            key = str(typ)
+            health["unknown_types"][key] = health["unknown_types"].get(key, 0) + 1
+
+    data_end = max(data_ts) if data_ts else 0.0
+
+    # Open spans: the focus is assumed to last until the next span starts
+    # (or until the end of the data if there is no next span).
+    spans.sort(key=lambda s: (s.start, s.end))
+    for i, s in enumerate(spans):
+        if s.open_:
+            nxt = spans[i + 1].start if i + 1 < len(spans) else data_end
+            s.end = max(s.start, nxt)
+    return spans, sorted(ctrl), media, sorted(wifi), data_end
+
+
+def run_build(args):
+    indir = os.path.expanduser(args.input)
+    if not os.path.isdir(indir):
+        raise UsageError(f"input directory not found: {indir}")
+    tz, tz_name = resolve_tz(args.tz)
+    cfg_path = os.path.expanduser(args.config)
+    compiled, order, cat_source, cat_spec = load_categories(cfg_path, args.config_explicit)
+
+    all_days = scan_days(indir)
+    if args.day:
+        w_from = w_to = parse_date(args.day)
+    elif args.week:
+        d = parse_date(args.week)
+        w_from = d - dt.timedelta(days=d.weekday())  # ISO week, Monday start
+        w_to = w_from + dt.timedelta(days=6)
+    elif args.from_ or args.to:
+        if not (args.from_ and args.to):
+            raise UsageError("--from and --to must be given together")
+        w_from, w_to = parse_date(args.from_), parse_date(args.to)
+        if w_from > w_to:
+            raise UsageError("--from is after --to")
+    else:
+        if not all_days:
+            raise UsageError(f"no events-YYYY-MM-DD.jsonl.gz files found in {indir}")
+        w_from, w_to = all_days[0], all_days[-1]
+
+    n_days = (w_to - w_from).days + 1
+    days = [w_from + dt.timedelta(days=i) for i in range(n_days)]
+    isos = [d.isoformat() for d in days]
+    lo = day_epoch(w_from, tz)
+    hi = day_epoch(w_to + ONE_DAY, tz)
+
+    read_lo = w_from - dt.timedelta(days=args.lookback_days)
+    read_hi = w_to + ONE_DAY
+    files = select_files(indir, read_lo, read_hi)
+
+    health = new_health(indir, tz_name, cat_source)
+    health["window_days"] = n_days
+    file_days = {d for d, _ in files if w_from <= d <= w_to}
+    health["days_with_event_file"] = len(file_days)
+    health["window_days_without_event_file"] = [i for d, i in zip(days, isos) if d not in file_days]
+
+    events = read_events(files, health)
+    spans, ctrl, media, wifi, data_end = normalize(events, compiled, health)
+
+    cap = args.media_max_gap * 60.0
+    didx = DayIndex(days, tz)
+
+    # ---- per-day containers
+    per_day = {i: {c: 0.0 for c in order} for i in isos}
+    tot = {i: {"active_minutes": 0.0, "idle_span_minutes": 0.0, "media_minutes": 0.0,
+               "afk_minutes": 0.0, "locked_minutes": 0.0} for i in isos}
+    per_day_hour = {i: [0.0] * 24 for i in isos}
+    hour_total = [0.0] * 24
+    cat_app_hour = collections.defaultdict(float)
+    app_tot = collections.defaultdict(float)
+    timeline = {i: {"activity": [], "afk": [], "locked": [], "media": [], "wifi": []} for i in isos}
+
+    # ---- spans (focus) in window
+    in_win = [s for s in spans if s.end > lo and s.start < hi]
+    health["span_records_in_window"] = len(in_win)
+    health["span_idle_in_window"] = sum(1 for s in in_win if s.idle)
+    max_end = -math.inf
+    for s in in_win:  # overlap audit (data-quality check, not used in totals)
+        if s.start < max_end:
+            health["span_overlaps_in_window"] += 1
+            health["span_overlap_seconds"] += min(max_end, s.end) - s.start
+        max_end = max(max_end, s.end)
+
+    unclassified_count = 0
+    classified_count = 0
+    for s in in_win:
+        if s.idle:
+            continue
+        if s.cat == FALLBACK_CATEGORY:
+            unclassified_count += 1
+        else:
+            classified_count += 1
+    for s in in_win:
+        a, b = max(s.start, lo), min(s.end, hi)
+        if b <= a:
+            continue
+        for d, h, p0, p1 in hour_pieces(a, b, tz):
+            iso = d.isoformat()
+            if iso not in tot:
+                continue
+            m = (p1 - p0) / 60.0
+            if s.idle:
+                tot[iso]["idle_span_minutes"] += m
+                kind = "idle"
+            else:
+                tot[iso]["active_minutes"] += m
+                per_day[iso][s.cat] += m
+                per_day_hour[iso][h] += m
+                hour_total[h] += m
+                cat_app_hour[(s.cat, s.app, h)] += m
+                app_tot[(s.cat, s.app)] += m
+                kind = s.cat
+            timeline[iso]["activity"].append((p0, p1, kind))
+
+    # ---- AFK / lock from control events
+    afk_iv, lock_iv, open_flags = control_intervals(ctrl, data_end)
+    health["open_control_states_at_end"] = open_flags
+    afk_total = lock_total = 0.0
+    for a, b in afk_iv:
+        for iso, p0, p1 in didx.split(a, b):
+            tot[iso]["afk_minutes"] += (p1 - p0) / 60.0
+            timeline[iso]["afk"].append((p0, p1, "afk"))
+    for a, b in lock_iv:
+        for iso, p0, p1 in didx.split(a, b):
+            tot[iso]["locked_minutes"] += (p1 - p0) / 60.0
+            timeline[iso]["locked"].append((p0, p1, "locked"))
+
+    # ---- media: per-player intervals bounded by next event of that player
+    by_player = collections.defaultdict(list)
+    for ts, player, status in media:
+        by_player[player].append((ts, status))
+    player_iv = {}
+    for player, evs in by_player.items():
+        ivs = []
+        for i, (t, st) in enumerate(evs):
+            if st != "playing":
+                continue
+            # Playing runs until the player's next event. The cap only applies
+            # when no Paused/Stopped was recorded (next event is another
+            # Playing, or there is no next event), i.e. the stop went missing.
+            end = t + cap
+            if i + 1 < len(evs):
+                nxt_t, nxt_st = evs[i + 1]
+                end = nxt_t if nxt_st != "playing" else min(nxt_t, t + cap)
+            if end > t:
+                ivs.append((t, end))
+        player_iv[player] = merge_intervals(ivs)  # per-player overlap dedupe
+    union = merge_intervals([iv for v in player_iv.values() for iv in v])
+    media_per_player = {}
+    for player, ivs in player_iv.items():
+        media_per_player[player] = sum(
+            p1 - p0 for a, b in ivs for _, p0, p1 in didx.split(a, b)) / 60.0
+    media_total = 0.0
+    for a, b in union:
+        for iso, p0, p1 in didx.split(a, b):
+            m = (p1 - p0) / 60.0
+            tot[iso]["media_minutes"] += m
+            media_total += m
+            timeline[iso]["media"].append((p0, p1, "media"))
+
+    # ---- wifi bands (label holds from its event until the next wifi event)
+    wifi_segs = []
+    for i, (t, label) in enumerate(wifi):
+        end = wifi[i + 1][0] if i + 1 < len(wifi) else data_end
+        if end > t:
+            wifi_segs.append((t, end, label))
+    labels = sorted({lab for _, _, lab in wifi_segs})
+    wifi_minutes = collections.defaultdict(float)
+    for a, b, label in wifi_segs:
+        for iso, p0, p1 in didx.split(a, b):
+            wifi_minutes[label] += (p1 - p0) / 60.0
+            timeline[iso]["wifi"].append((p0, p1, label))
+
+    # ---- health finishing
+    active_total = sum(tot[i]["active_minutes"] for i in isos)
+    other_total = sum(per_day[i].get(FALLBACK_CATEGORY, 0.0) for i in isos)
+    health["span_unclassified_percent_time"] = pct(other_total, active_total)
+    health["span_unclassified_percent_count"] = pct(
+        unclassified_count, unclassified_count + classified_count)
+    health["days_with_active_time"] = sum(1 for i in isos if tot[i]["active_minutes"] > 0)
+    event_days = set()
+    for s in in_win:
+        for iso, _, _ in didx.split(s.start, s.end):
+            event_days.add(iso)
+    for ts, _, _ in media:
+        if lo <= ts < hi:
+            event_days.add(local_date_iso(ts, tz))
+    for ts, _ in ctrl:
+        if lo <= ts < hi:
+            event_days.add(local_date_iso(ts, tz))
+    for ts, _ in wifi:
+        if lo <= ts < hi:
+            event_days.add(local_date_iso(ts, tz))
+    health["days_with_any_event"] = len([i for i in isos if i in event_days])
+
+    # ---- assemble aggregates
+    total_active = active_total
+    per_hour = [round(x, 2) for x in hour_total]
+    agg_top = sorted(app_tot.items(), key=lambda kv: (-kv[1], kv[0][1]))
+    top_apps = [{"category": c, "app": a, "minutes": r2(m), "percent": pct(m, total_active)}
+                for (c, a), m in agg_top]
+    cat_rows = []
+    for (c, a, h), m in sorted(cat_app_hour.items(),
+                               key=lambda kv: (order.index(kv[0][0]), kv[0][1], kv[0][2])):
+        cat_rows.append({"category": c, "app": a, "hour": h, "minutes": r2(m)})
+
+    per_day_out, per_day_pct, per_day_totals = {}, {}, {}
+    for i in isos:
+        active_i = tot[i]["active_minutes"]
+        per_day_out[i] = {c: r2(m) for c, m in per_day[i].items()}
+        per_day_pct[i] = {c: pct(m, active_i) for c, m in per_day[i].items()}
+        t = {k: r2(v) for k, v in tot[i].items()}
+        t["unclassified_percent"] = pct(per_day[i].get(FALLBACK_CATEGORY, 0.0), active_i)
+        per_day_totals[i] = t
+
+    totals = {
+        "active_minutes": r2(total_active),
+        "idle_span_minutes": r2(sum(tot[i]["idle_span_minutes"] for i in isos)),
+        "media_minutes": r2(media_total),
+        "afk_minutes": r2(sum(tot[i]["afk_minutes"] for i in isos)),
+        "locked_minutes": r2(sum(tot[i]["locked_minutes"] for i in isos)),
+        "category_minutes": {c: r2(sum(per_day[i][c] for i in isos)) for c in order},
+        "category_percent": {c: pct(sum(per_day[i][c] for i in isos), total_active) for c in order},
+    }
+
+    aggregates = {
+        "schema_version": VERSION,
+        "generated_at": dt.datetime.now(tz).isoformat(timespec="seconds"),
+        "window": {"from": w_from.isoformat(), "to": w_to.isoformat(), "days": n_days,
+                   "timezone": tz_name, "lookback_days": args.lookback_days,
+                   "media_max_gap_minutes": args.media_max_gap},
+        "categories": {"order": order, "source": cat_source, "patterns": cat_spec},
+        "health": health,
+        "days": isos,
+        "per_day": per_day_out,               # per_day[date][category] = minutes
+        "per_day_percent": per_day_pct,       # per_day_percent[date][category] = % of active
+        "per_day_totals": per_day_totals,     # active, idle, media, afk, locked, unclassified %
+        "per_day_hour": {i: [r2(x) for x in per_day_hour[i]] for i in isos},
+        "per_hour": per_hour,                 # hour-of-day totals across the window
+        "by_category_app_hour": cat_rows,
+        "top_apps": top_apps,                 # sorted by minutes; report shows top 10
+        "media_minutes": {
+            "total": r2(media_total),
+            "per_player": {p: r2(m) for p, m in sorted(media_per_player.items())},
+            "per_day": {i: r2(tot[i]["media_minutes"]) for i in isos},
+        },
+        "afk_minutes": {"total": totals["afk_minutes"],
+                        "per_day": {i: r2(tot[i]["afk_minutes"]) for i in isos}},
+        "locked_minutes": {"total": totals["locked_minutes"],
+                           "per_day": {i: r2(tot[i]["locked_minutes"]) for i in isos}},
+        "wifi_minutes": {k: r2(v) for k, v in sorted(wifi_minutes.items())},
+        "totals": totals,
+    }
+
+    day_bounds = {iso: didx.bounds[k] for k, iso in enumerate(isos)}
+    return aggregates, timeline, day_bounds, tz, labels, cat_spec
+
+
+# --------------------------------------------------------------------------
+# HTML rendering (hand-rolled inline SVG)
+# --------------------------------------------------------------------------
+
+def esc(x) -> str:
+    return html.escape(str(x), quote=True)
+
+
+def hm(minutes: float) -> str:
+    total = int(round(minutes))
+    return f"{total // 60}h {total % 60:02d}m"
+
+
+def color_map(order, labels_wifi):
+    colors = {}
+    extra = iter(EXTRA_COLORS)
+    for c in order:
+        if c in CAT_COLORS:
+            colors[c] = CAT_COLORS[c]
+        else:
+            colors[c] = next(extra, "#888888")
+    wifi = {lab: WIFI_COLORS[k % len(WIFI_COLORS)] for k, lab in enumerate(labels_wifi)}
+    return colors, wifi
+
+
+def svg_stacked_bars(aggr, order, colors):
+    days = aggr["days"]
+    label_w, bar_w, row_h = 96, 720, 22
+    totals = [aggr["per_day_totals"][d]["active_minutes"] for d in days]
+    scale_max = max(totals) if totals and max(totals) > 0 else 1.0
+    width = label_w + bar_w + 110
+    height = len(days) * row_h + 12
+    out = [f'<svg width="{width}" height="{height}" role="img" aria-label="Stacked bars per category per day">']
+    for k, d in enumerate(days):
+        y = 6 + k * row_h
+        out.append(f'<text x="{label_w - 6}" y="{y + 15}" text-anchor="end">{esc(d)}</text>')
+        x = float(label_w)
+        active = aggr["per_day_totals"][d]["active_minutes"]
+        for c in order:
+            m = aggr["per_day"][d].get(c, 0.0)
+            if m <= 0:
+                continue
+            w = m / scale_max * bar_w
+            p = aggr["per_day_percent"][d].get(c, 0.0)
+            out.append(
+                f'<rect x="{x:.1f}" y="{y}" width="{max(w, 0.5):.1f}" height="{row_h - 5}" '
+                f'fill="{colors[c]}"><title>{esc(d)} {esc(c)}: {m:.1f} min ({p:.1f}%)</title></rect>')
+            x += w
+        out.append(f'<text x="{x + 5:.1f}" y="{y + 15}">{active:.1f} min</text>')
+    out.append("</svg>")
+    return "".join(out)
+
+
+def heat_color(t):
+    t = max(0.0, min(1.0, t))
+    a, b = (240, 244, 255), (31, 78, 156)
+    return "#{:02x}{:02x}{:02x}".format(*(round(a[k] + (b[k] - a[k]) * t) for k in range(3)))
+
+
+def svg_heatmap(aggr):
+    days = aggr["days"]
+    label_w, cell_w, cell_h = 96, 28, 18
+    width = label_w + 24 * cell_w + 8
+    height = 22 + len(days) * cell_h + 6
+    out = [f'<svg width="{width}" height="{height}" role="img" aria-label="Hour-of-day heatmap">']
+    for h in range(0, 24, 3):
+        out.append(f'<text x="{label_w + h * cell_w + cell_w / 2:.1f}" y="14" text-anchor="middle">{h:02d}</text>')
+    for k, d in enumerate(days):
+        y = 22 + k * cell_h
+        out.append(f'<text x="{label_w - 6}" y="{y + 13}" text-anchor="end">{esc(d)}</text>')
+        row = aggr["per_day_hour"][d]
+        for h in range(24):
+            v = row[h]
+            x = label_w + h * cell_w
+            out.append(
+                f'<rect x="{x}" y="{y}" width="{cell_w - 2}" height="{cell_h - 2}" '
+                f'fill="{heat_color(v / HEATMAP_FULL_MINUTES)}">'
+                f'<title>{esc(d)} {h:02d}:00: {v:.1f} active min</title></rect>')
+    out.append("</svg>")
+    return "".join(out)
+
+
+def svg_media_vs_active(aggr):
+    days = aggr["days"]
+    label_w, bar_w, bh = 96, 620, 9
+    row_h = 26
+    vals = [max(aggr["per_day_totals"][d]["active_minutes"], aggr["per_day_totals"][d]["media_minutes"])
+            for d in days]
+    scale = max(vals) if vals and max(vals) > 0 else 1.0
+    width = label_w + bar_w + 150
+    height = len(days) * row_h + 26
+    out = [f'<svg width="{width}" height="{height}" role="img" aria-label="Media vs active time per day">',
+           f'<rect x="{label_w}" y="4" width="10" height="10" fill="{ACTIVE_COLOR}"/>'
+           f'<text x="{label_w + 14}" y="13">active (non-idle focus)</text>',
+           f'<rect x="{label_w + 180}" y="4" width="10" height="10" fill="{MEDIA_COLOR}"/>'
+           f'<text x="{label_w + 194}" y="13">media playing</text>']
+    for k, d in enumerate(days):
+        y = 22 + k * row_h
+        t = aggr["per_day_totals"][d]
+        out.append(f'<text x="{label_w - 6}" y="{y + 13}" text-anchor="end">{esc(d)}</text>')
+        for j, (val, col) in enumerate(((t["active_minutes"], ACTIVE_COLOR), (t["media_minutes"], MEDIA_COLOR))):
+            w = val / scale * bar_w
+            yy = y + j * (bh + 2)
+            out.append(f'<rect x="{label_w}" y="{yy}" width="{max(w, 0.5 if val > 0 else 0):.1f}" '
+                       f'height="{bh}" fill="{col}"><title>{esc(d)}: {val:.1f} min</title></rect>')
+            out.append(f'<text x="{label_w + w + 4:.1f}" y="{yy + 8}" font-size="10">{val:.1f}</text>')
+    out.append("</svg>")
+    return "".join(out)
+
+
+def svg_timeline(aggr, timeline, day_bounds, colors, wifi_colors):
+    days = aggr["days"]
+    left, W = 96, 800
+    row_h = 58
+    out = [f'<svg width="{left + W + 20}" height="{24 + len(days) * row_h + 4}" role="img" '
+           f'aria-label="Per-day timeline">']
+    for h in range(0, 25, 3):
+        x = left + W * h / 24
+        out.append(f'<line x1="{x:.1f}" y1="18" x2="{x:.1f}" y2="{24 + len(days) * row_h}" stroke="#eee"/>')
+        out.append(f'<text x="{x:.1f}" y="12" text-anchor="middle">{h:02d}</text>')
+    for k, d in enumerate(days):
+        y0 = 22 + k * row_h
+        ds, de = day_bounds[d]
+        span_s = de - ds
+
+        def X(t):
+            return left + (t - ds) / span_s * W
+
+        def tooltip(p0, p1, label):
+            a = dt.datetime.fromtimestamp(p0).strftime("%H:%M")
+            b = dt.datetime.fromtimestamp(p1).strftime("%H:%M")
+            return f"{a}-{b} {label}"
+
+        out.append(f'<text x="{left - 6}" y="{y0 + 14}" text-anchor="end">{esc(d)}</text>')
+        out.append(f'<rect x="{left}" y="{y0}" width="{W}" height="20" fill="#fafafa"/>')
+        tl = timeline[d]
+        for p0, p1, kind in merge_segments(tl["activity"]):
+            col = IDLE_COLOR if kind == "idle" else colors.get(kind, "#888")
+            label = "idle span" if kind == "idle" else kind
+            out.append(f'<rect x="{X(p0):.1f}" y="{y0}" width="{max(X(p1) - X(p0), 0.5):.1f}" height="20" '
+                       f'fill="{col}"><title>{esc(tooltip(p0, p1, label))}</title></rect>')
+        for p0, p1, _ in merge_segments(tl["media"]):
+            out.append(f'<rect x="{X(p0):.1f}" y="{y0 + 23}" width="{max(X(p1) - X(p0), 0.5):.1f}" height="6" '
+                       f'fill="{MEDIA_COLOR}"><title>{esc(tooltip(p0, p1, "media playing"))}</title></rect>')
+        for p0, p1, _ in merge_segments(tl["afk"]):
+            out.append(f'<rect x="{X(p0):.1f}" y="{y0 + 31}" width="{max(X(p1) - X(p0), 0.5):.1f}" height="6" '
+                       f'fill="{AFK_COLOR}"><title>{esc(tooltip(p0, p1, "AFK (idle)"))}</title></rect>')
+        for p0, p1, _ in merge_segments(tl["locked"]):
+            out.append(f'<rect x="{X(p0):.1f}" y="{y0 + 31}" width="{max(X(p1) - X(p0), 0.5):.1f}" height="6" '
+                       f'fill="{LOCK_COLOR}"><title>{esc(tooltip(p0, p1, "locked"))}</title></rect>')
+        for p0, p1, label in merge_segments(tl["wifi"]):
+            x0, x1 = X(p0), X(p1)
+            w = max(x1 - x0, 0.5)
+            out.append(f'<rect x="{x0:.1f}" y="{y0 + 40}" width="{w:.1f}" height="16" '
+                       f'fill="{wifi_colors.get(label, "#ccc")}"><title>{esc(tooltip(p0, p1, "wifi: " + label))}</title></rect>')
+            max_chars = int(w / 6.5)
+            if max_chars >= 3:
+                text = label if len(label) <= max_chars else label[: max_chars - 1] + "…"
+                out.append(f'<text x="{x0 + 3:.1f}" y="{y0 + 52}" font-size="10">{esc(text)}</text>')
+    out.append("</svg>")
+    return "".join(out)
+
+
+def legend_html(order, colors):
+    parts = [f'<span><i class="sw" style="background:{colors[c]}"></i>{esc(c)}</span>' for c in order]
+    return '<div class="legend">' + "".join(parts) + "</div>"
+
+
+def health_html(h, aggr):
+    rows = [
+        ("Input directory", h["input_dir"]),
+        ("Timezone", h["timezone"]),
+        ("Category rules", h["category_source"]),
+        ("Window", f'{aggr["window"]["from"]} to {aggr["window"]["to"]} ({h["window_days"]} days)'),
+        ("Event files read", f'{len(h["files_read"])} ({", ".join(h["files_read"]) or "none"})'),
+        ("Window days with no event file", f'{len(h["window_days_without_event_file"])} '
+                                           f'({", ".join(h["window_days_without_event_file"]) or "none"})'),
+        ("Days covered (any event)", f'{h["days_with_any_event"]} of {h["window_days"]}'),
+        ("Days with active time", f'{h["days_with_active_time"]} of {h["window_days"]}'),
+        ("Span events in window", f'{h["span_records_in_window"]} (idle-flagged: {h["span_idle_in_window"]}, '
+                                  f'open: {h["span_open_read"]} read in total)'),
+        ("Unclassified (other) share", f'{h["span_unclassified_percent_time"]:.1f}% of active time; '
+                                       f'{h["span_unclassified_percent_count"]:.1f}% of active span events'),
+        ("Overlapping spans", f'{h["span_overlaps_in_window"]} '
+                              f'({h["span_overlap_seconds"] / 60:.1f} min double-covered)'),
+        ("Media / control / wifi events", f'{h["media_events"]} / {h["control_events"]} / {h["wifi_events"]}'),
+        ("Malformed lines / invalid events", f'{h["malformed_lines"]} / {h["invalid_events"] + h["span_invalid"]}'),
+        ("Duplicate lines removed", str(h["duplicate_lines_removed"])),
+        ("Unknown event types", json.dumps(h["unknown_types"]) if h["unknown_types"] else "none"),
+        ("Control states still open at end of data", ", ".join(h["open_control_states_at_end"]) or "none"),
+        ("Unreadable files", "; ".join(h["unreadable_files"]) or "none"),
+    ]
+    body = "".join(f"<tr><th>{esc(k)}</th><td>{esc(v)}</td></tr>" for k, v in rows)
+    warn = ""
+    if h["span_records_in_window"] == 0:
+        warn = '<p class="warn">No span events in this window. Check --input and the date range.</p>'
+    return f'{warn}<table class="health">{body}</table>'
+
+
+def top_apps_html(aggr):
+    rows = aggr["top_apps"][:10]
+    if not rows:
+        return '<p class="note">No active focus time in this window.</p>'
+    body = []
+    for k, r in enumerate(rows, 1):
+        body.append(f'<tr><td>{k}</td><td>{esc(r["app"])}</td><td>{esc(r["category"])}</td>'
+                    f'<td class="num">{r["minutes"]:.1f}</td><td class="num">{hm(r["minutes"])}</td>'
+                    f'<td class="num">{r["percent"]:.1f}%</td></tr>')
+    return ('<table><tr><th>#</th><th>App (class)</th><th>Category</th><th>Minutes</th>'
+            '<th>Duration</th><th>% of active</th></tr>' + "".join(body) + "</table>")
+
+
+CSS = """
+body{font-family:system-ui,sans-serif;margin:24px;color:#222;max-width:1200px}
+h1{font-size:22px;margin-bottom:4px} h2{font-size:17px;margin-top:34px;border-bottom:1px solid #ddd;padding-bottom:4px}
+table{border-collapse:collapse;font-size:13px;margin-top:6px}
+th,td{padding:3px 10px;border-bottom:1px solid #eee;text-align:left;vertical-align:top}
+th.k,table.health th{width:260px;font-weight:600;color:#444}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+.legend span{display:inline-block;margin:4px 14px 4px 0;font-size:12px}
+.sw{display:inline-block;width:11px;height:11px;margin-right:4px;vertical-align:-1px}
+.note{color:#666;font-size:12px} .warn{color:#a40000;font-weight:600}
+.scroll{overflow-x:auto}
+svg text{font-family:system-ui,sans-serif;font-size:11px;fill:#333}
+"""
+
+
+def render_html(aggr, timeline, day_bounds, tz, wifi_labels, cat_spec):
+    order = aggr["categories"]["order"]
+    colors, wifi_colors = color_map(order, wifi_labels)
+    w = aggr["window"]
+    t = aggr["totals"]
+    summary = (f'Active {hm(t["active_minutes"])} · media playing {hm(t["media_minutes"])} · '
+               f'AFK {hm(t["afk_minutes"])} · locked {hm(t["locked_minutes"])} · '
+               f'idle-flagged spans {hm(t["idle_span_minutes"])}')
+    cat_list = "".join(
+        f'<tr><th>{esc(c)}</th><td>{t["category_minutes"][c]:.1f} min</td>'
+        f'<td class="num">{t["category_percent"][c]:.1f}%</td></tr>' for c in order)
+    wifi_rows = "".join(f'<tr><th>{esc(k)}</th><td>{v:.1f} min</td></tr>'
+                        for k, v in aggr["wifi_minutes"].items()) or '<tr><td colspan="2">no wifi events</td></tr>'
+    parts = [
+        '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">',
+        f'<title>hyprmon report {esc(w["from"])} to {esc(w["to"])}</title>',
+        f"<style>{CSS}</style></head><body>",
+        f'<h1>hyprmon report</h1><p class="note">{esc(w["from"])} to {esc(w["to"])} · '
+        f'{esc(w["timezone"])} · generated {esc(aggr["generated_at"])}</p>',
+        f"<p>{esc(summary)}</p>",
+        "<h2>Data health</h2>", health_html(aggr["health"], aggr),
+        "<h2>Category totals</h2>",
+        f'<table>{cat_list}</table>',
+        "<h2>1. Active minutes per category per day</h2>",
+        legend_html(order, colors),
+        '<div class="scroll">', svg_stacked_bars(aggr, order, colors), "</div>",
+        "<h2>2. Hour-of-day heatmap (active minutes per hour)</h2>",
+        '<p class="note">Cell intensity = active minutes in that local hour (full colour at 60 min).</p>',
+        '<div class="scroll">', svg_heatmap(aggr), "</div>",
+        "<h2>3. Top 10 apps</h2>", top_apps_html(aggr),
+        "<h2>4. Media playing vs active time per day</h2>",
+        '<p class="note">Media time = union of Playing intervals across players. A Playing run ends at the '
+        f'player\'s next event; without one it is capped at {w["media_max_gap_minutes"]:g} min.</p>',
+        '<div class="scroll">', svg_media_vs_active(aggr), "</div>",
+        "<h2>5. Per-day timeline</h2>",
+        '<p class="note">Top bar: category colours (grey = idle-flagged spans). Then media (red), '
+        'AFK (grey) / locked (black), wifi label band.</p>',
+        '<div class="scroll">', svg_timeline(aggr, timeline, day_bounds, colors, wifi_colors), "</div>",
+        '<h3 style="font-size:14px">Wifi time per label</h3>', f"<table>{wifi_rows}</table>",
+        '<h2>Category rules used</h2><table>',
+    ]
+    for name in order:
+        pats = cat_spec.get(name, [])
+        parts.append(f'<tr><th>{esc(name)}</th><td><code>{esc(" | ".join(pats) or "(fallback)")}</code></td></tr>')
+    parts.append("</table></body></html>")
+    return "".join(parts)
+
+
+# --------------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------------
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        prog="hyprmon-report.py",
+        description="Aggregate hyprmon event stores into aggregates.json and a self-contained report.html.")
+    sel = p.add_argument_group("time window (pick one; default = all days present)")
+    sel.add_argument("--day", metavar="YYYY-MM-DD", help="single local day")
+    sel.add_argument("--week", metavar="YYYY-MM-DD",
+                     help="ISO week (Mon-Sun) containing this date")
+    sel.add_argument("--from", dest="from_", metavar="YYYY-MM-DD", help="first local day (inclusive)")
+    sel.add_argument("--to", metavar="YYYY-MM-DD", help="last local day (inclusive)")
+    p.add_argument("--input", default=DEFAULT_INPUT,
+                   help=f"directory with events-YYYY-MM-DD.jsonl.gz (default {DEFAULT_INPUT})")
+    p.add_argument("--config", default=DEFAULT_CONFIG,
+                   help=f"TOML config with a [categories] table (default {DEFAULT_CONFIG})")
+    p.add_argument("--out", default=DEFAULT_OUT, help=f"output directory (default {DEFAULT_OUT})")
+    p.add_argument("--tz", metavar="IANA_ZONE",
+                   help="timezone for day/hour bucketing (default: TZ env or /etc/localtime)")
+    p.add_argument("--media-max-gap", type=float, default=DEFAULT_MEDIA_MAX_GAP_MIN, metavar="MIN",
+                   help="max media Playing run when the player sent no Paused/Stopped (default %(default)s)")
+    p.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS,
+                   help="extra day files read before the window for open state (default %(default)s)")
+    return p
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    args.config_explicit = args.config != DEFAULT_CONFIG
+    try:
+        if sum(bool(x) for x in (args.day, args.week, args.from_ or args.to)) > 1:
+            raise UsageError("use only one of --day, --week, --from/--to")
+        if args.media_max_gap <= 0:
+            raise UsageError("--media-max-gap must be > 0")
+        if args.lookback_days < 0:
+            raise UsageError("--lookback-days must be >= 0")
+        aggr, timeline, day_bounds, tz, wifi_labels, cat_spec = run_build(args)
+    except UsageError as e:
+        print(f"hyprmon-report: error: {e}", file=sys.stderr)
+        return 2
+
+    out = os.path.abspath(os.path.expanduser(args.out))
+    os.makedirs(out, exist_ok=True)
+    agg_path = os.path.join(out, "aggregates.json")
+    html_path = os.path.join(out, "report.html")
+    with open(agg_path, "w", encoding="utf-8") as fh:
+        json.dump(aggr, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+    with open(html_path, "w", encoding="utf-8") as fh:
+        fh.write(render_html(aggr, timeline, day_bounds, tz, wifi_labels, cat_spec))
+
+    t = aggr["totals"]
+    h = aggr["health"]
+    print(f"window {aggr['window']['from']}..{aggr['window']['to']} ({aggr['window']['days']} days)")
+    print(f"active {t['active_minutes']:.1f} min, media {t['media_minutes']:.1f} min, "
+          f"afk {t['afk_minutes']:.1f} min, locked {t['locked_minutes']:.1f} min")
+    print(f"span events in window: {h['span_records_in_window']}, "
+          f"unclassified: {h['span_unclassified_percent_time']:.1f}% of active time")
+    print(f"wrote {agg_path}")
+    print(f"wrote {html_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -279,6 +279,16 @@
 
         listener = [
           {
+            # hyprmon: input-idle marker for activity tracking (180 s = same
+            # convention as ActivityWatch/awatcher). Note: browsers hold an
+            # idle-inhibit during video playback, so this listener stays
+            # quiet while watching — media time is counted by hyprmon's MPRIS
+            # sensor instead. Lock state is polled by hyprmon (LockedHint).
+            timeout = 180;
+            on-timeout = "hyprmon idle";
+            on-resume = "hyprmon active";
+          }
+          {
             timeout = 150; # 2.5 min
             on-timeout = "brightnessctl -s set 10";
             on-resume = "brightnessctl -r";
