@@ -851,6 +851,23 @@ class Recorder:
         self._store.append(record)
         self.stats["spans_written"] += 1
 
+    def record_window_state(self, state: Mapping[str, Any]) -> None:
+        """Persist one playback-hint sample. A censored (drop-rule) focused
+        window is stored without class or title: only the bare flags."""
+        rule = _first_rule(self._config.censor_rules, state.get("class"), state.get("title"))
+        record: dict[str, Any] = {
+            "ts": self._clock(),
+            "type": "window_state",
+            "inhibiting_idle": bool(state.get("inhibiting_idle")),
+            "fullscreen": int(state.get("fullscreen") or 0),
+        }
+        if rule is not None and rule.action == "drop":
+            record["censored"] = True
+        else:
+            record["class"] = state.get("class") or ""
+        self._store.append(record)
+        self.stats["window_state_records"] += 1
+
     # -- lock and idle ------------------------------------------------------
 
     def set_idle(self, idle: bool, at: float | None = None) -> None:
@@ -1160,6 +1177,30 @@ def read_hypr_state(instance: str | None) -> tuple[list[dict[str, Any]], dict[st
     return [c for c in clients if isinstance(c, dict)], active
 
 
+WINDOW_STATE_POLL_S = 60
+
+
+def read_window_state(instance: str | None) -> dict[str, Any]:
+    """Focused window's playback hint from hyprctl.
+
+    Browsers hold a Wayland idle-inhibit while media plays (any player, even
+    fullscreen video on course platforms that never expose MPRIS). The
+    property changes without a socket2 event, so it must be sampled.
+    The title is fetched ONLY for censor matching and is never persisted."""
+    env = dict(os.environ)
+    if instance:
+        env["HYPRLAND_INSTANCE_SIGNATURE"] = instance
+    active = _hyprctl_json(["activewindow"], env)
+    if not isinstance(active, dict):
+        raise SensorUnavailable("hyprctl returned an unexpected shape")
+    return {
+        "class": str(active.get("class") or ""),
+        "title": str(active.get("title") or ""),
+        "inhibiting_idle": bool(active.get("inhibitingIdle")),
+        "fullscreen": int(active.get("fullscreen") or 0),
+    }
+
+
 def _read_text(path: Path) -> str | None:
     try:
         return path.read_text(encoding="ascii", errors="replace")
@@ -1363,6 +1404,7 @@ class Daemon:
         self._tasks = [
             _Task("lock", LOCK_POLL_S, self._poll_lock),
             _Task("media", MEDIA_POLL_S, self._poll_media),
+            _Task("window_state", WINDOW_STATE_POLL_S, self._poll_window_state),
             _Task("resources", RESOURCE_POLL_S, self._poll_resources),
             _Task("wifi", WIFI_POLL_S, self._poll_wifi),
             _Task("rotate", ROTATE_CHECK_S, self._check_rotation),
@@ -1563,6 +1605,11 @@ class Daemon:
         if self._recorder.locked:
             return  # nothing from the session is recorded while locked
         self._recorder.record_media(read_media())
+
+    def _poll_window_state(self) -> None:
+        if self._recorder.locked:
+            return  # nothing from the session is recorded while locked
+        self._recorder.record_window_state(read_window_state(self._events.instance))
 
     def _poll_resources(self) -> None:
         self._recorder.record_resources(self._samples.sample())

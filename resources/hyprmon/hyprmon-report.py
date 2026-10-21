@@ -46,7 +46,7 @@ SEED_CATEGORIES = {
     "school": [
         "jetbrains-idea", "bludiště", r"\bOC\b", "prolog", "stack", "xournal",
         "rnote", "anki", "teams-for-linux", "moodle", "overleaf",
-    ],
+        r"(?i)lesson|lecture|lekce|přednáška|cvičení|course|kurz|quiz|homework|úkol|moodle|fit ?čvut|online\.fit"],
     "dev": ["foot", "code", "helix", r"\bhx\b", "docker", "git"],
     "media": ["youtube", r"\bmpv\b", "spotify", "spotifast", r"\(\d+\).*YouTube"],
     "messaging": ["telegram", "discord", "signal"],
@@ -60,6 +60,7 @@ CAT_COLORS = {
 EXTRA_COLORS = ["#f28e2b", "#76b7b2", "#edc948", "#ff9da7", "#9c755f", "#86bcb6", "#d37295"]
 WIFI_COLORS = ["#8dd3c7", "#ffffb3", "#bebada", "#fb8072", "#80b1d3", "#fdb462", "#b3de69", "#fccde5"]
 MEDIA_COLOR = "#e15759"
+PLAYBACK_COLOR = "#f28e2b"
 ACTIVE_COLOR = "#4e79a7"
 IDLE_COLOR = "#e6e6e6"
 AFK_COLOR = "#9a9a9a"
@@ -383,6 +384,7 @@ def new_health(input_dir, tz_name, cat_source):
         "span_unclassified_percent_time": 0.0,
         "span_unclassified_percent_count": 0.0,
         "media_events": 0,
+        "window_state_events": 0,
         "control_events": 0,
         "wifi_events": 0,
         "resources_events": 0,
@@ -395,7 +397,7 @@ def new_health(input_dir, tz_name, cat_source):
 
 
 def normalize(events, compiled, health):
-    spans, ctrl, media, wifi = [], [], [], []
+    spans, ctrl, media, wifi, wstates = [], [], [], [], []
     data_ts = []
     for ev in events:
         typ = ev.get("type")
@@ -441,6 +443,13 @@ def normalize(events, compiled, health):
                 continue
             wifi.append((ts, str(ev.get("label") or "(none)")))
             data_ts.append(ts)
+        elif typ == "window_state":
+            health["window_state_events"] += 1
+            if ts is None:
+                health["invalid_events"] += 1
+                continue
+            wstates.append((ts, bool(ev.get("inhibiting_idle")), bool(ev.get("censored"))))
+            data_ts.append(ts)
         elif typ == "resources":
             health["resources_events"] += 1
             if ts is not None:
@@ -458,7 +467,7 @@ def normalize(events, compiled, health):
         if s.open_:
             nxt = spans[i + 1].start if i + 1 < len(spans) else data_end
             s.end = max(s.start, nxt)
-    return spans, sorted(ctrl), media, sorted(wifi), data_end
+    return spans, sorted(ctrl), media, sorted(wifi), sorted(wstates), data_end
 
 
 def run_build(args):
@@ -504,14 +513,14 @@ def run_build(args):
     health["window_days_without_event_file"] = [i for d, i in zip(days, isos) if d not in file_days]
 
     events = read_events(files, health)
-    spans, ctrl, media, wifi, data_end = normalize(events, compiled, health)
+    spans, ctrl, media, wifi, wstates, data_end = normalize(events, compiled, health)
 
     cap = args.media_max_gap * 60.0
     didx = DayIndex(days, tz)
 
     # ---- per-day containers
     per_day = {i: {c: 0.0 for c in order} for i in isos}
-    tot = {i: {"active_minutes": 0.0, "idle_span_minutes": 0.0, "media_minutes": 0.0,
+    tot = {i: {"active_minutes": 0.0, "idle_span_minutes": 0.0, "media_minutes": 0.0, "playback_minutes": 0.0, "playback_censored_minutes": 0.0,
                "afk_minutes": 0.0, "locked_minutes": 0.0} for i in isos}
     per_day_hour = {i: [0.0] * 24 for i in isos}
     hour_total = [0.0] * 24
@@ -607,6 +616,34 @@ def run_build(args):
             media_total += m
             timeline[iso]["media"].append((p0, p1, "media"))
 
+    # ---- playback hint (window_state samples): each sample with
+    # inhibiting_idle covers the interval since the previous sample of any
+    # kind (poll cadence ~60 s), capped at 2 min so a missed poll cannot
+    # over-count. Censored samples (private window focused) count as
+    # unattributed playback.
+    PLAYBACK_SAMPLE_CAP = 120.0
+    pb_ivs, pb_cens_ivs = [], []
+    prev_ts = None
+    for ts, inh, cens in wstates:
+        if inh:
+            start = (prev_ts if prev_ts is not None else ts - 60.0)
+            start = max(start, ts - PLAYBACK_SAMPLE_CAP)
+            if ts > start:
+                (pb_cens_ivs if cens else pb_ivs).append((start, ts))
+        prev_ts = ts
+    playback_total = 0.0
+    for a2, b2 in merge_intervals(pb_ivs):
+        for iso, p0, p1 in didx.split(a2, b2):
+            m = (p1 - p0) / 60.0
+            tot[iso]["playback_minutes"] += m
+            playback_total += m
+    playback_censored_total = 0.0
+    for a2, b2 in merge_intervals(pb_cens_ivs):
+        for iso, p0, p1 in didx.split(a2, b2):
+            m = (p1 - p0) / 60.0
+            tot[iso]["playback_censored_minutes"] += m
+            playback_censored_total += m
+
     # ---- wifi bands (label holds from its event until the next wifi event)
     wifi_segs = []
     for i, (t, label) in enumerate(wifi):
@@ -666,6 +703,8 @@ def run_build(args):
         "active_minutes": r2(total_active),
         "idle_span_minutes": r2(sum(tot[i]["idle_span_minutes"] for i in isos)),
         "media_minutes": r2(media_total),
+        "playback_minutes": r2(playback_total),
+        "playback_censored_minutes": r2(playback_censored_total),
         "afk_minutes": r2(sum(tot[i]["afk_minutes"] for i in isos)),
         "locked_minutes": r2(sum(tot[i]["locked_minutes"] for i in isos)),
         "category_minutes": {c: r2(sum(per_day[i][c] for i in isos)) for c in order},
@@ -790,8 +829,10 @@ def svg_heatmap(aggr):
 def svg_media_vs_active(aggr):
     days = aggr["days"]
     label_w, bar_w, bh = 96, 620, 9
-    row_h = 26
-    vals = [max(aggr["per_day_totals"][d]["active_minutes"], aggr["per_day_totals"][d]["media_minutes"])
+    row_h = 40
+    vals = [max(aggr["per_day_totals"][d].get("active_minutes", 0.0),
+                aggr["per_day_totals"][d].get("media_minutes", 0.0),
+                aggr["per_day_totals"][d].get("playback_minutes", 0.0))
             for d in days]
     scale = max(vals) if vals and max(vals) > 0 else 1.0
     width = label_w + bar_w + 150
@@ -800,12 +841,17 @@ def svg_media_vs_active(aggr):
            f'<rect x="{label_w}" y="4" width="10" height="10" fill="{ACTIVE_COLOR}"/>'
            f'<text x="{label_w + 14}" y="13">active (non-idle focus)</text>',
            f'<rect x="{label_w + 180}" y="4" width="10" height="10" fill="{MEDIA_COLOR}"/>'
-           f'<text x="{label_w + 194}" y="13">media playing</text>']
+           f'<text x="{label_w + 194}" y="13">media playing (MPRIS)</text>',
+           f'<rect x="{label_w + 360}" y="4" width="10" height="10" fill="{PLAYBACK_COLOR}"/>'
+           f'<text x="{label_w + 374}" y="13">video playback (idle-inhibit hint)</text>']
     for k, d in enumerate(days):
         y = 22 + k * row_h
-        t = aggr["per_day_totals"][d]
+        t_ = aggr["per_day_totals"][d]
         out.append(f'<text x="{label_w - 6}" y="{y + 13}" text-anchor="end">{esc(d)}</text>')
-        for j, (val, col) in enumerate(((t["active_minutes"], ACTIVE_COLOR), (t["media_minutes"], MEDIA_COLOR))):
+        bars = ((t_.get("active_minutes", 0.0), ACTIVE_COLOR),
+                (t_.get("media_minutes", 0.0), MEDIA_COLOR),
+                (t_.get("playback_minutes", 0.0), PLAYBACK_COLOR))
+        for j, (val, col) in enumerate(bars):
             w = val / scale * bar_w
             yy = y + j * (bh + 2)
             out.append(f'<rect x="{label_w}" y="{yy}" width="{max(w, 0.5 if val > 0 else 0):.1f}" '
