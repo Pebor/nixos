@@ -1,5 +1,5 @@
 # hyprmon configuration (managed in ~/nixos — this file is symlinked to
-# ~/.config/hyprmon/config.toml by modules/features/activity-monitor.nix).
+# ~/.config/hyprmon/hyprmon.toml by modules/features/activity-monitor.nix).
 #
 # Every key is optional. Top-level keys must come before any [table] or
 # [[array]] header in TOML.

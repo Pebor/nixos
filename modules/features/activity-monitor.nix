@@ -5,7 +5,7 @@
 # Reports: `hyprmon-report --week YYYY-MM-DD` -> report.html + aggregates.json.
 { ... }:
 {
-  flake.modules.homeManager.activity-monitor = { pkgs, ... }:
+  flake.modules.homeManager.activity-monitor = { pkgs, lib, ... }:
     let
       py = "${pkgs.python3}/bin/python3";
       # PATH export: the daemon shells out to hyprctl/busctl/loginctl/nmcli.
@@ -23,7 +23,15 @@
       home.packages = [ hyprmon hyprmon-report ];
 
       # Config lives in the repo; edit it here and `hmswitch`.
-      xdg.configFile."hyprmon/config.toml".source = ../../resources/hyprmon/config.toml;
+      # NOTE: the daemon reads ~/.config/hyprmon/hyprmon.toml (default_config_path).
+      xdg.configFile."hyprmon/hyprmon.toml".source = ../../resources/hyprmon/config.toml;
+
+      # The store dir must exist before the sandboxed service starts:
+      # ProtectHome=read-only means the daemon cannot create it itself.
+      home.activation.hyprmonStore = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+        install -d -m 0700 "$HOME/.local/share/hyprmon"
+        chmod 0700 "$HOME/.local/share/hyprmon"
+      '';
 
       systemd.user.services.hyprmon = {
         Unit = {
@@ -37,9 +45,11 @@
           RestartSec = "3";
           # Hardened: the collector only needs the Hyprland event socket
           # (AF_UNIX in %t), D-Bus (AF_UNIX) and reads of /proc + /sys.
+          # The '-' prefix makes systemd tolerate a missing path instead of
+          # failing the whole namespace with 226/NAMESPACE.
           ProtectSystem = "strict";
           ProtectHome = "read-only";
-          ReadWritePaths = [ "%h/.local/share/hyprmon" "%t" ];
+          ReadWritePaths = [ "-%h/.local/share/hyprmon" "%t" ];
           RestrictAddressFamilies = "AF_UNIX";
           NoNewPrivileges = true;
         };
