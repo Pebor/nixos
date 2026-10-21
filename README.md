@@ -237,8 +237,13 @@ explains itself in the journal if `.env` is missing something
 ### Later (deliberately not set up yet)
 
 - `nix.settings.max-jobs = 0` on clients for hard offload (no local builds)
-- Nextcloud backup automation (nightly DB dump + restic -> VPS) - not wired;
-  only manual dumps in `~/nextcloud/backups/` so far
+- Nextcloud backup automation - LOCAL half wired 2026-10-21, inside the compose
+  stack (`~/nextcloud/backup/`, crond at 03:30): all-databases dump + html
+  tarball + config/secrets bundle, retention 14 d / 3 daily + 4 weekly / 14 d,
+  log at `~/nextcloud/backups/backup.log`. Restore verified (0 import errors,
+  table/row counts identical). Deliberately NOT in this flake: the stack is
+  compose-managed, so its backups live with it. Offsite restic -> VPS is still
+  not wired - needs SSH access to the VPS first (currently closed by design).
 - tailscale exit node
 
 ## Notes
