@@ -37,6 +37,7 @@
 
       ssh-server
       tailscale
+      tailscale-serve
       oomd
       zram
 
