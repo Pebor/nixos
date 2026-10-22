@@ -6,10 +6,10 @@
     boot.loader.systemd-boot.enable = true;
     boot.loader.efi.canTouchEfiVariables = true;
 
-    # Kernel: upstream 7.2 series from nixpkgs for every host.
-    # mkDefault so a host can still pin another series (t420 uses
-    # linuxPackages_latest) without an option conflict.
-    boot.kernelPackages = lib.mkDefault pkgs.linuxPackages_7_2;
+    # Kernel: nixpkgs `linuxPackages_latest` for every host.
+    # mkDefault so a host can still pin a specific series without an
+    # option conflict.
+    boot.kernelPackages = lib.mkDefault pkgs.linuxPackages_latest;
 
     # Networking.
     networking.networkmanager.enable = true;
