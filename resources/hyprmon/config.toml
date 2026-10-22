@@ -23,22 +23,81 @@ store_raw_ssid = false
 # media. When one of these is seen, only the playback status is stored.
 media_placeholder_titles = ["Zen is playing media", "Firefox is playing media"]
 
+# Process context: for terminals and editors, record what the window is running
+# in the foreground (e.g. hx, bash) and a label for its working directory. This
+# is what turns "foot" into "foot/hx" and lets ~/Documents/school count as
+# school. The raw cwd is never stored — only the matched [[path_label]] label.
+context_enabled = true
+
+# Only these window classes are inspected (regexes). For a browser or chat app
+# the process tree says nothing useful, so leave this to terminals/editors.
+context_classes = ["^(foot|footclient|kitty|alacritty|wezterm|ghostty)$",
+                   "^(code|code-url-handler|jetbrains-.*)$"]
+
+# Map a working-directory regex to a stored label. First match wins. The path
+# itself is never written to the store, only `label`.
+[[path_label]]
+match = "/Documents/school"
+label = "school"
+
+[[path_label]]
+match = "/nixos$|/nixos/"
+label = "nixos"
+
+# Loopback endpoint the companion browser extension reports the active tab to.
+# Host and port bind to 127.0.0.1 only. Leave `token` empty for no auth (fine on
+# loopback), or set one and put the same value in the extension's options. This
+# is what powers per-YouTube-channel stats and domain (cvut.cz) detection.
+[url_source]
+enabled = true
+host = "127.0.0.1"
+port = 4319
+token = ""
+
+# Map a media player / url host to a service label so YouTube, Spotify and the
+# rest are counted separately in the report. Matched against the url host first,
+# then the player name. Unmatched media falls back to the host or player name.
+[media_services]
+youtube = ["youtube", "youtu\\.be"]
+spotify = ["spotify"]
+music = ["\\bmpv\\b", "soundcloud", "bandcamp", "\\bvlc\\b", "music"]
+
+# Category rules for the report. Each entry is a list of regexes matched
+# (case-insensitive, re.search) against the window class, title, foreground
+# proc, path label and the concurrent browser host — per field. First matching
+# category wins; unmatched spans fall back to "other". Order matters: school
+# first (so hx in ~/Documents/school is school), then coding (its own colour,
+# not "foot"), then the services, then generic browsing/terminal.
+[categories]
+school = ["jetbrains-idea", "bludiště", "\\bOC\\b", "prolog", "stack", "xournal",
+          "rnote", "anki", "teams-for-linux", "moodle", "overleaf",
+          "cvut\\.cz", "\\bschool\\b",
+          "(?i)lesson|lecture|lekce|přednáška|cvičení|course|kurz|quiz|homework|úkol|fit ?čvut|online\\.fit"]
+coding = ["\\bhx\\b", "helix", "\\bcode\\b", "jetbrains", "\\bnvim\\b", "\\bvim\\b", "\\bemacs\\b"]
+youtube = ["youtube", "youtu\\.be"]
+music = ["spotify", "\\bmpv\\b", "soundcloud", "bandcamp", "spotifast", "music"]
+messaging = ["telegram", "discord", "signal"]
+browsing = ["firefox", "zen", "helium", "chromium", "brave", "browser"]
+terminal = ["foot", "kitty", "alacritty", "wezterm", "ghostty",
+            "\\bbash\\b", "\\bfish\\b", "\\bzsh\\b", "\\bgit\\b", "\\bdocker\\b",
+            "\\bpython", "\\bmake\\b", "\\bcargo\\b", "\\bnode\\b"]
+
 # Map Wi-Fi SSIDs to labels. Unmapped SSIDs are stored as "other".
 # Add your networks here, e.g.:
 #   "MyHomeWiFi" = "home"
 #   "eduroam"    = "school"
 [wifi_labels]
 
-# Censor rules, evaluated when a focus span closes, before anything is written.
-# A rule matches when every matcher it sets matches (match_title AND match_class).
-# The first matching rule wins.
-#   action = "drop"    : the span is never persisted.
-#   action = "redact"  : the span is stored with its title replaced by `replacement`.
+# Censor rules, evaluated when a focus span closes (and for browser tab reports),
+# before anything is written. A rule matches when every matcher it sets matches
+# (match_title AND match_class AND match_host). The first matching rule wins.
+#   action = "drop"    : the span/report is never persisted.
+#   action = "redact"  : stored with its title replaced by `replacement`.
 # Regexes use Python `re.search`; anchor with ^ and $ as needed.
 #
-# If this file has no [[censor]] entries, the two rules below are used as
-# built-in defaults. Write `censor = []` at the top level to disable censoring
-# (not recommended).
+# If this file has no [[censor]] entries, the private-browsing rules below are
+# used as built-in defaults. Write `censor = []` at the top level to disable
+# censoring (not recommended).
 
 # Firefox/Zen private windows end their title with the browser name plus
 # "Private Browsing" (verified live on Zen beta: "... — Zen Browser Private
@@ -54,6 +113,11 @@ action = "drop"
 match_class = 'zen-beta|helium'
 match_title = 'Incognito|Private'
 action = "drop"
+
+# Example: drop every browser tab on a private host entirely (host + title).
+# [[censor]]
+# match_host = '(^|\.)mybank\.cz$'
+# action = "drop"
 
 # Example of a redaction rule: keep the span and its duration, hide the title.
 # [[censor]]

@@ -32,32 +32,44 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 VERSION = 1
 ONE_DAY = dt.timedelta(days=1)
 DEFAULT_INPUT = "~/.local/share/hyprmon/"
-DEFAULT_CONFIG = "~/.config/hyprmon/config.toml"
+DEFAULT_CONFIG = "~/.config/hyprmon/hyprmon.toml"
 DEFAULT_OUT = "./hyprmon-report-out"
 DEFAULT_MEDIA_MAX_GAP_MIN = 30.0
 DEFAULT_LOOKBACK_DAYS = 1
 HEATMAP_FULL_MINUTES = 60.0  # heatmap intensity 1.0 == 60 active minutes in an hour
 
 # Seed category rules. Each entry is one regex; a category matches when any of
-# its regexes matches 'class|title' (case-insensitive, re.search). Categories
-# are tried in order, first match wins, unmatched spans fall back to 'other'.
-# A [categories] table in the config file REPLACES these seeds entirely.
+# its regexes matches the window class, title, foreground proc, path label or
+# the concurrent browser host (case-insensitive, re.search, matched per-field).
+# Categories are tried in order, first match wins; unmatched spans fall back to
+# 'other'. A [categories] table in the config file REPLACES these seeds entirely.
+#
+# Order matters: school first (so a hx session in ~/Documents/school lands in
+# school), then coding (hx gets its own colour, not "foot"), then the media and
+# messaging services, then generic browsing/terminal.
 SEED_CATEGORIES = {
     "school": [
         "jetbrains-idea", "bludiště", r"\bOC\b", "prolog", "stack", "xournal",
         "rnote", "anki", "teams-for-linux", "moodle", "overleaf",
+        r"cvut\.cz", r"\bschool\b",
         r"(?i)lesson|lecture|lekce|přednáška|cvičení|course|kurz|quiz|homework|úkol|moodle|fit ?čvut|online\.fit"],
-    "dev": ["foot", "code", "helix", r"\bhx\b", "docker", "git"],
-    "media": ["youtube", r"\bmpv\b", "spotify", "spotifast", r"\(\d+\).*YouTube"],
+    "coding": [r"\bhx\b", "helix", r"\bcode\b", "jetbrains", r"\bnvim\b", r"\bvim\b", r"\bemacs\b"],
+    "youtube": ["youtube", r"youtu\.be"],
+    "music": ["spotify", r"\bmpv\b", "soundcloud", "bandcamp", "spotifast", "music"],
     "messaging": ["telegram", "discord", "signal"],
+    "browsing": ["firefox", "zen", "helium", "chromium", "brave", "browser"],
+    "terminal": ["foot", "kitty", "alacritty", "wezterm", "ghostty",
+                 r"\bbash\b", r"\bfish\b", r"\bzsh\b", r"\bgit\b", r"\bdocker\b",
+                 r"\bpython", r"\bmake\b", r"\bcargo\b", r"\bnode\b", r"\bgo\b"],
 }
 FALLBACK_CATEGORY = "other"
 
 CAT_COLORS = {
-    "school": "#4e79a7", "dev": "#59a14f", "media": "#e15759",
-    "messaging": "#b07aa1", "other": "#bab0ac",
+    "school": "#4e79a7", "coding": "#59a14f", "youtube": "#e15759",
+    "music": "#f28e2b", "messaging": "#b07aa1", "browsing": "#76b7b2",
+    "terminal": "#9c755f", "other": "#bab0ac",
 }
-EXTRA_COLORS = ["#f28e2b", "#76b7b2", "#edc948", "#ff9da7", "#9c755f", "#86bcb6", "#d37295"]
+EXTRA_COLORS = ["#edc948", "#ff9da7", "#86bcb6", "#d37295", "#4e79a7", "#59a14f", "#e15759"]
 WIFI_COLORS = ["#8dd3c7", "#ffffb3", "#bebada", "#fb8072", "#80b1d3", "#fdb462", "#b3de69", "#fccde5"]
 MEDIA_COLOR = "#e15759"
 PLAYBACK_COLOR = "#f28e2b"
@@ -66,6 +78,14 @@ IDLE_COLOR = "#e6e6e6"
 AFK_COLOR = "#9a9a9a"
 LOCK_COLOR = "#333333"
 
+# Map a media player / url host to a service label so YouTube, Spotify and the
+# rest can be counted separately. Matched against the url host first, then the
+# player name. A [media_services] table in the config REPLACES these seeds.
+DEFAULT_MEDIA_SERVICES = {
+    "youtube": [r"youtube", r"youtu\.be"],
+    "spotify": [r"spotify"],
+    "music": [r"\bmpv\b", "soundcloud", "bandcamp", r"\bvlc\b", "music"],
+}
 FILE_RE = re.compile(r"^events-(\d{4}-\d{2}-\d{2})\.jsonl(\.gz)?$")
 
 
@@ -85,6 +105,10 @@ class Span:
     app: str
     idle: bool
     open_: bool = False
+    proc: str = ""
+    path: str = ""
+    host: str = ""
+    title: str = ""
 
 
 # --------------------------------------------------------------------------
@@ -198,13 +222,69 @@ def load_categories(path: str, explicit: bool):
     return compiled, order, source, {n: list(p) for n, p in spec.items()}
 
 
-def classify(cls: str, title: str, compiled) -> str:
-    subject = f"{cls}|{title}"
+def classify(cls: str, title: str, compiled, proc: str = "", path: str = "", host: str = "") -> str:
+    """Match each field independently (so anchors work per-field), first hit wins."""
+    subjects = [cls, title, proc, path, host]
     for name, rxs in compiled:
         for rx in rxs:
-            if rx.search(subject):
-                return name
+            for s in subjects:
+                if s and rx.search(s):
+                    return name
     return FALLBACK_CATEGORY
+
+
+def load_media_services(path: str, explicit: bool):
+    """Return (compiled_services, source_text). Service name -> list of regexes."""
+    spec = DEFAULT_MEDIA_SERVICES
+    source = "seed defaults"
+    if os.path.isfile(path):
+        try:
+            with open(path, "rb") as fh:
+                cfg = tomllib.load(fh)
+        except tomllib.TOMLDecodeError as e:
+            raise ConfigError(f"{path}: invalid TOML: {e}")
+        if "media_services" in cfg:
+            raw = cfg["media_services"]
+            if not isinstance(raw, dict):
+                raise ConfigError("[media_services] must be a table")
+            spec = {}
+            for name, pats in raw.items():
+                if isinstance(pats, str):
+                    pats = [pats]
+                if not isinstance(pats, list) or not all(isinstance(p, str) for p in pats):
+                    raise ConfigError(f"[media_services].{name} must be a list of regex strings")
+                spec[name] = pats
+            source = f"config: {path}"
+    elif explicit:
+        raise ConfigError(f"config file not found: {path}")
+
+    compiled = []
+    for name, pats in spec.items():
+        rxs = []
+        for p in pats:
+            try:
+                rxs.append(re.compile(p, re.IGNORECASE))
+            except re.error as e:
+                raise ConfigError(f"[media_services].{name}: bad regex {p!r}: {e}")
+        compiled.append((name, rxs))
+    return compiled, source
+
+
+def service_of(player: str, host: str, compiled) -> str:
+    """Media service label: match the url host first, then the player name."""
+    for name, rxs in compiled:
+        for rx in rxs:
+            if (host and rx.search(host)) or (player and rx.search(player)):
+                return name
+    return host or player or "other"
+
+
+def same_site(a: str, b: str) -> bool:
+    """True when two hosts look like the same site (ignoring subdomains)."""
+    if not a or not b:
+        return False
+    a, b = a.lower().lstrip("www."), b.lower().lstrip("www.")
+    return a == b or a.endswith("." + b) or b.endswith("." + a)
 
 
 # --------------------------------------------------------------------------
@@ -340,13 +420,13 @@ class DayIndex:
 
 
 def merge_segments(segs):
-    """segs: [(p0, p1, kind)] -> merged adjacent same-kind segments."""
+    """segs: [(p0, p1, kind, label)] -> merged adjacent same-kind/same-label segments."""
     out = []
-    for p0, p1, kind in sorted(segs, key=lambda s: (s[0], s[1])):
-        if out and out[-1][2] == kind and p0 <= out[-1][1] + 1.0:
+    for p0, p1, kind, label in sorted(segs, key=lambda s: (s[0], s[1])):
+        if out and out[-1][2] == kind and out[-1][3] == label and p0 <= out[-1][1] + 1.0:
             out[-1][1] = max(out[-1][1], p1)
         else:
-            out.append([p0, p1, kind])
+            out.append([p0, p1, kind, label])
     return [tuple(s) for s in out]
 
 
@@ -384,6 +464,9 @@ def new_health(input_dir, tz_name, cat_source):
         "span_unclassified_percent_time": 0.0,
         "span_unclassified_percent_count": 0.0,
         "media_events": 0,
+        "url_events": 0,
+        "spans_with_proc": 0,
+        "spans_with_path": 0,
         "window_state_events": 0,
         "control_events": 0,
         "wifi_events": 0,
@@ -396,8 +479,17 @@ def new_health(input_dir, tz_name, cat_source):
     }
 
 
+def url_index_at(points, t):
+    """Index of the URL point active at time t (last point with ts <= t), else -1."""
+    if not points:
+        return -1
+    ts_list = [p["ts"] for p in points]
+    i = bisect.bisect_right(ts_list, t) - 1
+    return i if i >= 0 else -1
+
+
 def normalize(events, compiled, health):
-    spans, ctrl, media, wifi, wstates = [], [], [], [], []
+    raw_spans, ctrl, media, wifi, wstates, url_points = [], [], [], [], [], []
     data_ts = []
     for ev in events:
         typ = ev.get("type")
@@ -416,18 +508,37 @@ def normalize(events, compiled, health):
             elif end < start:
                 health["span_invalid"] += 1
                 continue
-            cls = str(ev.get("class") or "")
-            title = str(ev.get("title") or "")
-            cat = classify(cls, title, compiled)
-            spans.append(Span(start, end, cat, cls or "(unknown)", bool(ev.get("idle")), is_open))
+            raw_spans.append({
+                "start": start, "end": end, "open": is_open,
+                "cls": str(ev.get("class") or ""),
+                "title": str(ev.get("title") or ""),
+                "proc": str(ev.get("proc") or ""),
+                "path": str(ev.get("path") or ""),
+                "idle": bool(ev.get("idle")),
+            })
             data_ts.append(start)
             data_ts.append(end)
+        elif typ == "url":
+            health["url_events"] = health.get("url_events", 0) + 1
+            if ts is None:
+                health["invalid_events"] += 1
+                continue
+            url_points.append({
+                "ts": ts,
+                "host": str(ev.get("host") or ""),
+                "channel": str(ev.get("channel") or ""),
+                "title": str(ev.get("title") or ""),
+                "browser": str(ev.get("browser") or ""),
+            })
+            data_ts.append(ts)
         elif typ == "media":
             health["media_events"] += 1
             if ts is None:
                 health["invalid_events"] += 1
                 continue
-            media.append((ts, str(ev.get("player") or "unknown"), str(ev.get("status") or "").strip().lower()))
+            media.append((ts, str(ev.get("player") or "unknown"),
+                          str(ev.get("status") or "").strip().lower(),
+                          str(ev.get("title") or ""), str(ev.get("url_host") or "")))
             data_ts.append(ts)
         elif typ in ("idle", "active", "lock", "unlock"):
             health["control_events"] += 1
@@ -460,14 +571,43 @@ def normalize(events, compiled, health):
 
     data_end = max(data_ts) if data_ts else 0.0
 
+    # URL points hold their host/channel/title until the next report.
+    url_points.sort(key=lambda p: p["ts"])
+    health["url_events"] = len(url_points)
+
     # Open spans: the focus is assumed to last until the next span starts
     # (or until the end of the data if there is no next span).
-    spans.sort(key=lambda s: (s.start, s.end))
-    for i, s in enumerate(spans):
-        if s.open_:
-            nxt = spans[i + 1].start if i + 1 < len(spans) else data_end
-            s.end = max(s.start, nxt)
-    return spans, sorted(ctrl), media, sorted(wifi), sorted(wstates), data_end
+    raw_spans.sort(key=lambda s: (s["start"], s["end"]))
+    for i, s in enumerate(raw_spans):
+        if s["open"]:
+            nxt = raw_spans[i + 1]["start"] if i + 1 < len(raw_spans) else data_end
+            s["end"] = max(s["start"], nxt)
+
+    # Build Spans: attribute the concurrent browser host, then classify on the
+    # widened subject (class|title|proc|path|host). The host only applies to a
+    # window of the same browser that reported the URL — otherwise a background
+    # Spotify span would inherit whatever tab is open.
+    spans = []
+    for s in raw_spans:
+        host = ""
+        idx = url_index_at(url_points, s["start"])
+        if idx >= 0:
+            p = url_points[idx]
+            browser, cls_l = p["browser"].lower(), s["cls"].lower()
+            if browser and (browser in cls_l or cls_l in browser):
+                host = p["host"]
+        proc = s["proc"]
+        app = s["cls"] or "(unknown)"
+        if proc and proc.lower() != app.lower():
+            app = f"{app}/{proc}"  # foot/hx, foot/bash — terminals are not one app
+        cat = classify(s["cls"], s["title"], compiled, proc, s["path"], host)
+        spans.append(Span(s["start"], s["end"], cat, app, s["idle"], s["open"],
+                          proc, s["path"], host, s["title"]))
+        if proc:
+            health["spans_with_proc"] += 1
+        if s["path"]:
+            health["spans_with_path"] += 1
+    return spans, sorted(ctrl), media, sorted(wifi), sorted(wstates), url_points, data_end
 
 
 def run_build(args):
@@ -513,7 +653,8 @@ def run_build(args):
     health["window_days_without_event_file"] = [i for d, i in zip(days, isos) if d not in file_days]
 
     events = read_events(files, health)
-    spans, ctrl, media, wifi, wstates, data_end = normalize(events, compiled, health)
+    spans, ctrl, media, wifi, wstates, url_points, data_end = normalize(events, compiled, health)
+    media_services, media_service_source = load_media_services(cfg_path, args.config_explicit)
 
     cap = args.media_max_gap * 60.0
     didx = DayIndex(days, tz)
@@ -568,7 +709,7 @@ def run_build(args):
                 cat_app_hour[(s.cat, s.app, h)] += m
                 app_tot[(s.cat, s.app)] += m
                 kind = s.cat
-            timeline[iso]["activity"].append((p0, p1, kind))
+            timeline[iso]["activity"].append((p0, p1, kind, s.app))
 
     # ---- AFK / lock from control events
     afk_iv, lock_iv, open_flags = control_intervals(ctrl, data_end)
@@ -577,20 +718,23 @@ def run_build(args):
     for a, b in afk_iv:
         for iso, p0, p1 in didx.split(a, b):
             tot[iso]["afk_minutes"] += (p1 - p0) / 60.0
-            timeline[iso]["afk"].append((p0, p1, "afk"))
+            timeline[iso]["afk"].append((p0, p1, "afk", "AFK"))
     for a, b in lock_iv:
         for iso, p0, p1 in didx.split(a, b):
             tot[iso]["locked_minutes"] += (p1 - p0) / 60.0
-            timeline[iso]["locked"].append((p0, p1, "locked"))
+            timeline[iso]["locked"].append((p0, p1, "locked", "locked"))
 
-    # ---- media: per-player intervals bounded by next event of that player
+    # ---- media: per-player intervals bounded by next event of that player.
+    # Each playing interval carries its service and title so YouTube, Spotify
+    # and the rest can be counted separately.
     by_player = collections.defaultdict(list)
-    for ts, player, status in media:
-        by_player[player].append((ts, status))
+    for ts, player, status, title, host in media:
+        by_player[player].append((ts, status, title, host))
     player_iv = {}
+    playing_runs = []  # (start, end, service, title, host, player)
     for player, evs in by_player.items():
         ivs = []
-        for i, (t, st) in enumerate(evs):
+        for i, (t, st, title, host) in enumerate(evs):
             if st != "playing":
                 continue
             # Playing runs until the player's next event. The cap only applies
@@ -598,23 +742,73 @@ def run_build(args):
             # Playing, or there is no next event), i.e. the stop went missing.
             end = t + cap
             if i + 1 < len(evs):
-                nxt_t, nxt_st = evs[i + 1]
+                nxt_t, nxt_st = evs[i + 1][0], evs[i + 1][1]
                 end = nxt_t if nxt_st != "playing" else min(nxt_t, t + cap)
             if end > t:
                 ivs.append((t, end))
+                service = service_of(player, host, media_services)
+                playing_runs.append((t, end, service, title, host, player))
         player_iv[player] = merge_intervals(ivs)  # per-player overlap dedupe
     union = merge_intervals([iv for v in player_iv.values() for iv in v])
     media_per_player = {}
     for player, ivs in player_iv.items():
         media_per_player[player] = sum(
             p1 - p0 for a, b in ivs for _, p0, p1 in didx.split(a, b)) / 60.0
+
+    # Per-service playing minutes (union per service so overlap is not doubled).
+    service_iv = collections.defaultdict(list)
+    for t, end, service, _title, _host, _player in playing_runs:
+        service_iv[service].append((t, end))
+    media_per_service = {}
+    service_per_day = {i: {} for i in isos}
+    for service, ivs in service_iv.items():
+        total = 0.0
+        for a, b in merge_intervals(ivs):
+            for iso, p0, p1 in didx.split(a, b):
+                m = (p1 - p0) / 60.0
+                total += m
+                service_per_day[iso][service] = service_per_day[iso].get(service, 0.0) + m
+        media_per_service[service] = r2(total)
+
+    # Channel attribution: a playing interval belongs to the channel the active
+    # browser tab reported, but only when the media and the tab are the same
+    # site (so background Spotify is not credited to an open YouTube tab).
+    channel_playing = collections.defaultdict(float)
+    channel_titles = collections.defaultdict(set)
+    for t, end, _service, title, host, _player in playing_runs:
+        idx = url_index_at(url_points, t)
+        if idx < 0:
+            continue
+        p = url_points[idx]
+        if not p["channel"] or not same_site(host, p["host"]):
+            continue
+        for _iso, p0, p1 in didx.split(t, end):
+            channel_playing[p["channel"]] += (p1 - p0) / 60.0
+        if title:
+            channel_titles[p["channel"]].add(title)
+
+    # Focused time per host and per channel's tab, from browser focus spans
+    # (each span is roughly one tab, since a tab switch splits the span).
+    host_minutes = collections.defaultdict(float)
+    channel_tab = collections.defaultdict(float)
+    for s in in_win:
+        if s.idle or not s.host:
+            continue
+        idx = url_index_at(url_points, s.start)
+        channel = url_points[idx]["channel"] if idx >= 0 else ""
+        for _iso, p0, p1 in didx.split(s.start, s.end):
+            m = (p1 - p0) / 60.0
+            host_minutes[s.host] += m
+            if channel:
+                channel_tab[channel] += m
+
     media_total = 0.0
     for a, b in union:
         for iso, p0, p1 in didx.split(a, b):
             m = (p1 - p0) / 60.0
             tot[iso]["media_minutes"] += m
             media_total += m
-            timeline[iso]["media"].append((p0, p1, "media"))
+            timeline[iso]["media"].append((p0, p1, "media", "media"))
 
     # ---- playback hint (window_state samples): each sample with
     # inhibiting_idle covers the interval since the previous sample of any
@@ -655,7 +849,7 @@ def run_build(args):
     for a, b, label in wifi_segs:
         for iso, p0, p1 in didx.split(a, b):
             wifi_minutes[label] += (p1 - p0) / 60.0
-            timeline[iso]["wifi"].append((p0, p1, label))
+            timeline[iso]["wifi"].append((p0, p1, "wifi", label))
 
     # ---- health finishing
     active_total = sum(tot[i]["active_minutes"] for i in isos)
@@ -668,7 +862,7 @@ def run_build(args):
     for s in in_win:
         for iso, _, _ in didx.split(s.start, s.end):
             event_days.add(iso)
-    for ts, _, _ in media:
+    for ts, *_rest in media:
         if lo <= ts < hi:
             event_days.add(local_date_iso(ts, tz))
     for ts, _ in ctrl:
@@ -711,6 +905,17 @@ def run_build(args):
         "category_percent": {c: pct(sum(per_day[i][c] for i in isos), total_active) for c in order},
     }
 
+    channels = []
+    for ch in sorted(channel_playing, key=lambda c: (-channel_playing[c], c)):
+        channels.append({
+            "channel": ch,
+            "playing_minutes": r2(channel_playing[ch]),
+            "tab_minutes": r2(channel_tab.get(ch, 0.0)),
+            "videos": len(channel_titles[ch]),
+        })
+    hosts = [{"host": h, "tab_minutes": r2(m)}
+             for h, m in sorted(host_minutes.items(), key=lambda kv: (-kv[1], kv[0]))]
+
     aggregates = {
         "schema_version": VERSION,
         "generated_at": dt.datetime.now(tz).isoformat(timespec="seconds"),
@@ -730,8 +935,13 @@ def run_build(args):
         "media_minutes": {
             "total": r2(media_total),
             "per_player": {p: r2(m) for p, m in sorted(media_per_player.items())},
+            "per_service": media_per_service,
+            "per_service_per_day": {i: {s: r2(m) for s, m in service_per_day[i].items()} for i in isos},
             "per_day": {i: r2(tot[i]["media_minutes"]) for i in isos},
+            "service_source": media_service_source,
         },
+        "channels": channels,                 # per-YouTube-channel playing + tab minutes
+        "hosts": hosts,                       # tab-active minutes per browser host
         "afk_minutes": {"total": totals["afk_minutes"],
                         "per_day": {i: r2(tot[i]["afk_minutes"]) for i in isos}},
         "locked_minutes": {"total": totals["locked_minutes"],
@@ -887,21 +1097,21 @@ def svg_timeline(aggr, timeline, day_bounds, colors, wifi_colors):
         out.append(f'<text x="{left - 6}" y="{y0 + 14}" text-anchor="end">{esc(d)}</text>')
         out.append(f'<rect x="{left}" y="{y0}" width="{W}" height="20" fill="#fafafa"/>')
         tl = timeline[d]
-        for p0, p1, kind in merge_segments(tl["activity"]):
+        for p0, p1, kind, alabel in merge_segments(tl["activity"]):
             col = IDLE_COLOR if kind == "idle" else colors.get(kind, "#888")
-            label = "idle span" if kind == "idle" else kind
+            label = "idle span" if kind == "idle" else f"{kind} ({alabel})"
             out.append(f'<rect x="{X(p0):.1f}" y="{y0}" width="{max(X(p1) - X(p0), 0.5):.1f}" height="20" '
                        f'fill="{col}"><title>{esc(tooltip(p0, p1, label))}</title></rect>')
-        for p0, p1, _ in merge_segments(tl["media"]):
+        for p0, p1, _, _ in merge_segments(tl["media"]):
             out.append(f'<rect x="{X(p0):.1f}" y="{y0 + 23}" width="{max(X(p1) - X(p0), 0.5):.1f}" height="6" '
                        f'fill="{MEDIA_COLOR}"><title>{esc(tooltip(p0, p1, "media playing"))}</title></rect>')
-        for p0, p1, _ in merge_segments(tl["afk"]):
+        for p0, p1, _, _ in merge_segments(tl["afk"]):
             out.append(f'<rect x="{X(p0):.1f}" y="{y0 + 31}" width="{max(X(p1) - X(p0), 0.5):.1f}" height="6" '
                        f'fill="{AFK_COLOR}"><title>{esc(tooltip(p0, p1, "AFK (idle)"))}</title></rect>')
-        for p0, p1, _ in merge_segments(tl["locked"]):
+        for p0, p1, _, _ in merge_segments(tl["locked"]):
             out.append(f'<rect x="{X(p0):.1f}" y="{y0 + 31}" width="{max(X(p1) - X(p0), 0.5):.1f}" height="6" '
                        f'fill="{LOCK_COLOR}"><title>{esc(tooltip(p0, p1, "locked"))}</title></rect>')
-        for p0, p1, label in merge_segments(tl["wifi"]):
+        for p0, p1, _, label in merge_segments(tl["wifi"]):
             x0, x1 = X(p0), X(p1)
             w = max(x1 - x0, 0.5)
             out.append(f'<rect x="{x0:.1f}" y="{y0 + 40}" width="{w:.1f}" height="16" '
@@ -963,6 +1173,214 @@ def top_apps_html(aggr):
             '<th>Duration</th><th>% of active</th></tr>' + "".join(body) + "</table>")
 
 
+def build_timeline_payload(timeline, day_bounds, colors, wifi_colors):
+    """Flatten per-day timeline segments into a JSON payload for the zoomable view.
+
+    Times are seconds-of-day (0..86400) so every row shares one x-axis that can
+    be zoomed/panned. Labels carry the app (foot/hx), service or wifi name.
+    """
+    rows = []
+    for iso in timeline:
+        start = day_bounds[iso][0]
+        segs = []
+        for lane, key in (("activity", "activity"), ("media", "media"),
+                          ("afk", "afk"), ("afk", "locked"), ("wifi", "wifi")):
+            for p0, p1, kind, label in timeline[iso][key]:
+                segs.append({"lane": lane, "t0": round(p0 - start, 1),
+                             "t1": round(p1 - start, 1), "kind": kind, "label": label})
+        segs.sort(key=lambda s: (s["lane"], s["t0"]))
+        rows.append({"day": iso, "segs": segs})
+    return {
+        "days": list(timeline.keys()),
+        "lanes": ["activity", "media", "afk", "wifi"],
+        "catColors": colors,
+        "wifiColors": wifi_colors,
+        "special": {"idle": IDLE_COLOR, "media": MEDIA_COLOR,
+                    "afk": AFK_COLOR, "locked": LOCK_COLOR},
+        "rows": rows,
+    }
+
+
+TIMELINE_JS = r"""
+(function () {
+  var D = JSON.parse(document.getElementById('hm-tl-data').textContent);
+  var wrap = document.getElementById('hm-tl-wrap');
+  var svg = document.getElementById('hm-tl-svg');
+  var tip = document.getElementById('hm-tl-tip');
+  var NS = 'http://www.w3.org/2000/svg';
+  var PADL = 84, PADR = 16, PADT = 24, ROWH = 62;
+  var laneH = { activity: 22, media: 7, afk: 7, wifi: 13 };
+  var laneY = { activity: 2, media: 27, afk: 36, wifi: 45 };
+  var DAY = 86400;
+  var z0 = 0, z1 = DAY, W = 1080, plotW = W - PADL - PADR;
+
+  function X(t) { return PADL + (t - z0) / (z1 - z0) * plotW; }
+  function fmt(t) {
+    t = Math.max(0, Math.min(DAY, t));
+    var h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60);
+    return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+  }
+  function fmtDur(s) {
+    s = Math.round(s); var m = Math.floor(s / 60);
+    return m >= 60 ? (Math.floor(m / 60) + 'h ' + (m % 60) + 'm') : (m + 'm ' + (s % 60) + 's');
+  }
+  function color(seg) {
+    if (seg.lane === 'activity') return seg.kind === 'idle' ? D.special.idle : (D.catColors[seg.kind] || '#888');
+    if (seg.lane === 'media') return D.special.media;
+    if (seg.lane === 'afk') return seg.kind === 'locked' ? D.special.locked : D.special.afk;
+    return D.wifiColors[seg.label] || '#ccc';
+  }
+  function el(n, a) { var e = document.createElementNS(NS, n); for (var k in a) e.setAttribute(k, a[k]); return e; }
+  function clear() { while (svg.firstChild) svg.removeChild(svg.firstChild); }
+
+  function render() {
+    clear();
+    W = wrap.clientWidth || 1080;
+    plotW = W - PADL - PADR;
+    var height = PADT + D.rows.length * ROWH + 14;
+    svg.setAttribute('width', W);
+    svg.setAttribute('height', height);
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + height);
+    var span = z1 - z0;
+    var step = span > 12 * 3600 ? 3 * 3600 : span > 6 * 3600 ? 3600 : span > 2 * 3600 ? 1800
+             : span > 3600 ? 600 : span > 900 ? 300 : 60;
+    for (var t = Math.ceil(z0 / step) * step; t <= z1; t += step) {
+      var x = X(t);
+      svg.appendChild(el('line', { x1: x, y1: PADT - 6, x2: x, y2: PADT + D.rows.length * ROWH, stroke: '#eee' }));
+      var tx = el('text', { x: x, y: PADT - 10, 'text-anchor': 'middle', 'font-size': 10 });
+      tx.textContent = fmt(t); svg.appendChild(tx);
+    }
+    D.rows.forEach(function (row, ri) {
+      var y0 = PADT + ri * ROWH;
+      var lb = el('text', { x: PADL - 6, y: y0 + 16, 'text-anchor': 'end', 'font-size': 11 });
+      lb.textContent = row.day; svg.appendChild(lb);
+      D.lanes.forEach(function (lane) {
+        svg.appendChild(el('rect', { x: PADL, y: y0 + laneY[lane], width: plotW, height: laneH[lane], fill: '#fafafa' }));
+      });
+      row.segs.forEach(function (seg) {
+        var t0 = Math.max(seg.t0, z0), t1 = Math.min(seg.t1, z1);
+        if (t1 <= t0) return;
+        var r = el('rect', { x: X(t0), y: y0 + laneY[seg.lane], width: Math.max(X(t1) - X(t0), 0.6), height: laneH[seg.lane], fill: color(seg) });
+        r.addEventListener('mousemove', function (ev) { showTip(ev, seg); });
+        r.addEventListener('mouseleave', hideTip);
+        svg.appendChild(r);
+      });
+    });
+  }
+  function showTip(ev, seg) {
+    tip.style.display = 'block';
+    tip.textContent = fmt(seg.t0) + '\u2013' + fmt(seg.t1) + ' \u00b7 ' + fmtDur(seg.t1 - seg.t0) + ' \u00b7 ' + (seg.label || seg.kind);
+    var r = svg.getBoundingClientRect();
+    tip.style.left = (ev.clientX - r.left + 12) + 'px';
+    tip.style.top = (ev.clientY - r.top + 12) + 'px';
+  }
+  function hideTip() { tip.style.display = 'none'; }
+
+  svg.addEventListener('wheel', function (ev) {
+    ev.preventDefault();
+    var r = svg.getBoundingClientRect();
+    var frac = (ev.clientX - r.left - PADL) / plotW;
+    var at = z0 + frac * (z1 - z0);
+    var factor = ev.deltaY > 0 ? 1.25 : 0.8;
+    var nz0 = at - (at - z0) * factor, nz1 = at + (z1 - at) * factor;
+    if (nz1 - nz0 < 60) { nz0 = at - 30; nz1 = at + 30; }
+    if (nz0 < 0) { nz1 -= nz0; nz0 = 0; }
+    if (nz1 > DAY) { nz0 -= (nz1 - DAY); nz1 = DAY; }
+    z0 = Math.max(0, nz0); z1 = Math.min(DAY, nz1);
+    render();
+  }, { passive: false });
+
+  var dragging = false, dragX = 0, dragZ0 = 0, dragZ1 = 0;
+  svg.addEventListener('mousedown', function (ev) { dragging = true; dragX = ev.clientX; dragZ0 = z0; dragZ1 = z1; ev.preventDefault(); });
+  window.addEventListener('mouseup', function () { dragging = false; });
+  window.addEventListener('mousemove', function (ev) {
+    if (!dragging) return;
+    var dt = -((ev.clientX - dragX) / plotW) * (dragZ1 - dragZ0);
+    var span = dragZ1 - dragZ0;
+    z0 = Math.max(0, Math.min(DAY - span, dragZ0 + dt)); z1 = z0 + span;
+    render();
+  });
+
+  Array.prototype.forEach.call(document.querySelectorAll('.hm-tl-btn'), function (b) {
+    b.addEventListener('click', function () {
+      var hrs = parseFloat(b.getAttribute('data-hours'));
+      if (!hrs) { z0 = 0; z1 = DAY; }
+      else { var mid = (z0 + z1) / 2; z0 = Math.max(0, mid - hrs * 1800); z1 = Math.min(DAY, mid + hrs * 1800); }
+      render();
+    });
+  });
+
+  window.addEventListener('resize', render);
+  render();
+})();
+"""
+
+
+def interactive_timeline_html(payload):
+    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    data = data.replace("</", "<\\/")  # keep a stray </script> in a label from breaking out
+    controls = (
+        '<div class="tl-controls">'
+        '<button class="hm-tl-btn" data-hours="0">24h</button>'
+        '<button class="hm-tl-btn" data-hours="12">12h</button>'
+        '<button class="hm-tl-btn" data-hours="6">6h</button>'
+        '<button class="hm-tl-btn" data-hours="3">3h</button>'
+        '<button class="hm-tl-btn" data-hours="1">1h</button>'
+        '<button class="hm-tl-btn" data-hours="0.5">30m</button>'
+        '<span class="note"> scroll to zoom · drag to pan · hover for detail</span>'
+        '</div>'
+    )
+    return (
+        controls
+        + '<div id="hm-tl-wrap" class="tl-wrap">'
+        + '<svg id="hm-tl-svg" role="img" aria-label="Zoomable per-day timeline"></svg>'
+        + '<div id="hm-tl-tip" class="tl-tip"></div>'
+        + '</div>'
+        + '<script id="hm-tl-data" type="application/json">' + data + '</script>'
+        + '<script>' + TIMELINE_JS + '</script>'
+    )
+
+
+def services_html(aggr):
+    per_service = aggr["media_minutes"]["per_service"]
+    if not per_service:
+        return '<p class="note">No media playing recorded (or no service matched).</p>'
+    rows = "".join(
+        f'<tr><th>{esc(s)}</th><td class="num">{m:.1f}</td><td class="num">{hm(m)}</td></tr>'
+        for s, m in sorted(per_service.items(), key=lambda kv: -kv[1]))
+    return ('<table><tr><th>Service</th><th class="num">Minutes</th><th class="num">Duration</th></tr>'
+            + rows + '</table>')
+
+
+def channels_html(aggr):
+    rows = aggr.get("channels") or []
+    if not rows:
+        return ('<p class="note">No per-channel data yet. This needs the companion browser extension '
+                'reporting the active tab (channel + host) to hyprmon.</p>')
+    body = []
+    for k, r in enumerate(rows, 1):
+        body.append(f'<tr><td>{k}</td><td>{esc(r["channel"])}</td>'
+                    f'<td class="num">{r["playing_minutes"]:.1f}</td>'
+                    f'<td class="num">{hm(r["playing_minutes"])}</td>'
+                    f'<td class="num">{r["tab_minutes"]:.1f}</td>'
+                    f'<td class="num">{r["videos"]}</td></tr>')
+    return ('<table><tr><th>#</th><th>Channel</th><th class="num">Playing min</th>'
+            '<th class="num">Playing</th><th class="num">Tab min</th><th class="num">Videos</th></tr>'
+            + "".join(body) + '</table>')
+
+
+def hosts_html(aggr):
+    rows = (aggr.get("hosts") or [])[:15]
+    if not rows:
+        return ('<p class="note">No browsing tab time recorded. This needs the companion browser '
+                'extension reporting the active tab.</p>')
+    body = "".join(
+        f'<tr><td>{esc(h["host"])}</td><td class="num">{h["tab_minutes"]:.1f}</td>'
+        f'<td class="num">{hm(h["tab_minutes"])}</td></tr>' for h in rows)
+    return ('<table><tr><th>Site (host)</th><th class="num">Tab min</th><th class="num">Duration</th></tr>'
+            + body + '</table>')
+
+
 CSS = """
 body{font-family:system-ui,sans-serif;margin:24px;color:#222;max-width:1200px}
 h1{font-size:22px;margin-bottom:4px} h2{font-size:17px;margin-top:34px;border-bottom:1px solid #ddd;padding-bottom:4px}
@@ -975,12 +1393,19 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 .note{color:#666;font-size:12px} .warn{color:#a40000;font-weight:600}
 .scroll{overflow-x:auto}
 svg text{font-family:system-ui,sans-serif;font-size:11px;fill:#333}
+.tl-controls{margin:8px 0}
+.tl-controls button{font-size:12px;padding:3px 10px;margin-right:5px;border:1px solid #ccc;border-radius:4px;background:#fafafa;cursor:pointer}
+.tl-controls button:hover{background:#eef}
+.tl-wrap{position:relative;overflow-x:auto}
+.tl-tip{display:none;position:absolute;pointer-events:none;background:#222;color:#fff;font-size:12px;
+padding:4px 8px;border-radius:4px;white-space:nowrap;z-index:10;box-shadow:0 2px 6px rgba(0,0,0,.25)}
 """
 
 
 def render_html(aggr, timeline, day_bounds, tz, wifi_labels, cat_spec):
     order = aggr["categories"]["order"]
     colors, wifi_colors = color_map(order, wifi_labels)
+    tl_payload = build_timeline_payload(timeline, day_bounds, colors, wifi_colors)
     w = aggr["window"]
     t = aggr["totals"]
     summary = (f'Active {hm(t["active_minutes"])} · media playing {hm(t["media_minutes"])} · '
@@ -1012,10 +1437,23 @@ def render_html(aggr, timeline, day_bounds, tz, wifi_labels, cat_spec):
         '<p class="note">Media time = union of Playing intervals across players. A Playing run ends at the '
         f'player\'s next event; without one it is capped at {w["media_max_gap_minutes"]:g} min.</p>',
         '<div class="scroll">', svg_media_vs_active(aggr), "</div>",
-        "<h2>5. Per-day timeline</h2>",
+        "<h2>5. Media by service</h2>",
+        '<p class="note">Playing minutes grouped by service (YouTube, Spotify, …), so different kinds of '
+        'media are counted apart.</p>', services_html(aggr),
+        "<h2>6. YouTube channels</h2>",
+        '<p class="note">Playing time per channel, joined from MPRIS playback and the active tab\'s '
+        'channel. "Playing" is actual playback; "Tab" is focused-tab time.</p>', channels_html(aggr),
+        "<h2>7. Browsing &mdash; focused tab time per site</h2>",
+        '<p class="note">Time the browser was focused on each host. A domain matching a school rule '
+        '(e.g. cvut.cz) is counted as school.</p>', hosts_html(aggr),
+        "<h2>8. Per-day timeline (overview)</h2>",
         '<p class="note">Top bar: category colours (grey = idle-flagged spans). Then media (red), '
         'AFK (grey) / locked (black), wifi label band.</p>',
         '<div class="scroll">', svg_timeline(aggr, timeline, day_bounds, colors, wifi_colors), "</div>",
+        "<h2>9. Detailed timeline (zoom &amp; pan)</h2>",
+        '<p class="note">The same focus switches, inspectable. Lanes: focus (category colour, labelled '
+        'foot/hx etc), media, AFK/lock, wifi.</p>',
+        interactive_timeline_html(tl_payload),
         '<h3 style="font-size:14px">Wifi time per label</h3>', f"<table>{wifi_rows}</table>",
         '<h2>Category rules used</h2><table>',
     ]

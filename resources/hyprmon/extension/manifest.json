@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "hyprmon tab reporter",
+  "version": "1.0.0",
+  "description": "Reports the active tab (host, title, YouTube channel) to your local hyprmon daemon. Nothing leaves your machine.",
+  "permissions": ["tabs", "scripting", "alarms"],
+  "host_permissions": ["<all_urls>", "http://127.0.0.1/*"],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "hyprmon@local",
+      "strict_min_version": "115.0"
+    }
+  }
+}

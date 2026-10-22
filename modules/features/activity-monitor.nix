@@ -26,6 +26,10 @@
       # NOTE: the daemon reads ~/.config/hyprmon/hyprmon.toml (default_config_path).
       xdg.configFile."hyprmon/hyprmon.toml".source = ../../resources/hyprmon/config.toml;
 
+      # Companion browser extension (active-tab -> channel/URL stats).
+      # Load it unpacked from here in Zen/Helium. See resources/hyprmon/README.md.
+      home.file.".local/share/hyprmon-extension".source = ../../resources/hyprmon/extension;
+
       # The store dir must exist before the sandboxed service starts:
       # ProtectHome=read-only means the daemon cannot create it itself.
       home.activation.hyprmonStore = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
@@ -43,14 +47,17 @@
           ExecStart = "${hyprmon}/bin/hyprmon run";
           Restart = "always";
           RestartSec = "3";
-          # Hardened: the collector only needs the Hyprland event socket
-          # (AF_UNIX in %t), D-Bus (AF_UNIX) and reads of /proc + /sys.
+          # Hardened: the collector needs the Hyprland event socket (AF_UNIX in %t),
+          # D-Bus (AF_UNIX), reads of /proc + /sys (process context), and a
+          # loopback listener for browser tab reports.
           # The '-' prefix makes systemd tolerate a missing path instead of
           # failing the whole namespace with 226/NAMESPACE.
           ProtectSystem = "strict";
           ProtectHome = "read-only";
           ReadWritePaths = [ "-%h/.local/share/hyprmon" "%t" ];
-          RestrictAddressFamilies = "AF_UNIX";
+          # AF_UNIX for Hyprland socket + D-Bus; AF_INET/AF_INET6 for the
+          # loopback browser-tab URL ingest listener ([url_source]).
+          RestrictAddressFamilies = "AF_UNIX AF_INET AF_INET6";
           NoNewPrivileges = true;
         };
         Install.WantedBy = [ "graphical-session.target" ];

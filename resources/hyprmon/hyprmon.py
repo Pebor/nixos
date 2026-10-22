@@ -29,10 +29,12 @@ import argparse
 import dataclasses
 import fcntl
 import gzip
+import http.server
 import json
 import logging
 import os
 import pwd
+import queue
 import re
 import select
 import shutil
@@ -40,6 +42,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import tomllib
 import zlib
@@ -86,6 +89,20 @@ WIFI_POLL_S = 300.0
 WIFI_MIN_GAP_S = 60.0
 ROTATE_CHECK_S = 60.0
 STATS_LOG_S = 600.0
+
+# Process context: how far down a window's foreground process chain to look and
+# which window classes are worth looking at (terminals and editors; a browser's
+# own cwd says nothing about what he is reading).
+CONTEXT_MAX_DEPTH = 8
+DEFAULT_CONTEXT_CLASSES = (
+    r"^(foot|footclient|kitty|alacritty|wezterm|ghostty|org\.wezfurlong\.wezterm)$",
+    r"^(code|code-url-handler|jetbrains-.*)$",
+)
+PAGE_TITLE_MAX = 200
+
+# Loopback endpoint for the companion browser extension (active tab reports).
+DEFAULT_URL_PORT = 4319
+URL_MAX_BODY = 16 * 1024
 
 MPRIS_PREFIX = "org.mpris.MediaPlayer2."
 MPRIS_OBJECT = "/org/mpris/MediaPlayer2"
@@ -169,8 +186,9 @@ class CensorRule:
     class_re: re.Pattern[str] | None
     action: str  # "drop" or "redact"
     replacement: str
+    host_re: re.Pattern[str] | None = None
 
-    def matches(self, window_class: str | None, title: str | None) -> bool:
+    def matches(self, window_class: str | None, title: str | None, host: str | None = None) -> bool:
         """A rule matches when every matcher it defines matches (AND)."""
         if self.class_re is not None:
             if window_class is None or self.class_re.search(window_class) is None:
@@ -178,7 +196,26 @@ class CensorRule:
         if self.title_re is not None:
             if title is None or self.title_re.search(title) is None:
                 return False
+        if self.host_re is not None:
+            if host is None or self.host_re.search(host) is None:
+                return False
         return True
+
+
+@dataclasses.dataclass(frozen=True)
+class PathLabel:
+    """Maps a working directory regex to a stored label (the path itself is not stored)."""
+
+    match: re.Pattern[str]
+    label: str
+
+
+@dataclasses.dataclass(frozen=True)
+class UrlSource:
+    enabled: bool
+    host: str
+    port: int
+    token: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -191,6 +228,10 @@ class Config:
     wifi_labels: Mapping[str, str]
     media_placeholders: frozenset[str]
     censor_rules: tuple[CensorRule, ...]
+    context_enabled: bool = True
+    context_classes: tuple[re.Pattern[str], ...] = ()
+    path_labels: tuple[PathLabel, ...] = ()
+    url_source: UrlSource = UrlSource(False, "127.0.0.1", DEFAULT_URL_PORT, "")
 
 
 _TOP_LEVEL_KEYS = frozenset(
@@ -202,9 +243,21 @@ _TOP_LEVEL_KEYS = frozenset(
         "wifi_labels",
         "media_placeholder_titles",
         "censor",
+        "context_enabled",
+        "context_classes",
+        "path_label",
+        "url_source",
+        # Read by the report generator, validated only there.
+        "categories",
+        "media_services",
     }
 )
-_CENSOR_KEYS = frozenset({"match_title", "match_class", "action", "replacement"})
+_CENSOR_KEYS = frozenset({"match_title", "match_class", "match_host", "action", "replacement"})
+
+# Python regexes are not hashable in a frozen dataclass default; build the
+# default lazily instead.
+_DEFAULT_CONTEXT_CLASSES = tuple(re.compile(pattern) for pattern in DEFAULT_CONTEXT_CLASSES)
+
 
 
 def _check_keys(table: Mapping[str, Any], allowed: frozenset[str], where: str) -> None:
@@ -240,13 +293,62 @@ def _parse_censor_entry(entry: Any, index: int) -> CensorRule:
     _check_keys(entry, _CENSOR_KEYS, where)
     title_re = _compile_optional(entry, "match_title", where)
     class_re = _compile_optional(entry, "match_class", where)
-    if title_re is None and class_re is None:
-        raise ConfigError(f"{where} needs match_title and/or match_class")
+    host_re = _compile_optional(entry, "match_host", where)
+    if title_re is None and class_re is None and host_re is None:
+        raise ConfigError(f"{where} needs match_title, match_class and/or match_host")
     action = entry.get("action")
     if action not in ("drop", "redact"):
         raise ConfigError(f"{where}: action must be 'drop' or 'redact'")
     replacement = _typed(entry, "replacement", str, REDACTED_TEXT, where)
-    return CensorRule(title_re, class_re, action, replacement)
+    return CensorRule(title_re, class_re, action, replacement, host_re)
+
+
+def _parse_path_labels(entries: Any) -> tuple[PathLabel, ...]:
+    if not isinstance(entries, list):
+        raise ConfigError("config: 'path_label' must be an array of tables")
+    labels: list[PathLabel] = []
+    for index, entry in enumerate(entries):
+        where = f"[[path_label]] entry {index + 1}"
+        if not isinstance(entry, Mapping):
+            raise ConfigError(f"{where} must be a table")
+        _check_keys(entry, frozenset({"match", "label"}), where)
+        match = _compile_optional(entry, "match", where)
+        if match is None:
+            raise ConfigError(f"{where} needs a 'match' regex")
+        label = _typed(entry, "label", str, "", where)
+        if not label:
+            raise ConfigError(f"{where} needs a non-empty 'label'")
+        labels.append(PathLabel(match, label))
+    return tuple(labels)
+
+
+def _parse_url_source(table: Any) -> UrlSource:
+    if table is None:
+        return UrlSource(False, "127.0.0.1", DEFAULT_URL_PORT, "")
+    if not isinstance(table, Mapping):
+        raise ConfigError("config: [url_source] must be a table")
+    _check_keys(table, frozenset({"enabled", "host", "port", "token"}), "[url_source]")
+    port = _typed(table, "port", int, DEFAULT_URL_PORT, "[url_source]")
+    if not 1024 <= port <= 65535:
+        raise ConfigError("[url_source]: 'port' must be between 1024 and 65535")
+    host = _typed(table, "host", str, "127.0.0.1", "[url_source]")
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        raise ConfigError("[url_source]: 'host' must be a loopback address")
+    return UrlSource(
+        enabled=_typed(table, "enabled", bool, False, "[url_source]"),
+        host=host,
+        port=port,
+        token=_typed(table, "token", str, "", "[url_source]"),
+    )
+
+
+def _parse_context_classes(raw: Any) -> tuple[re.Pattern[str], ...]:
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise ConfigError("config: 'context_classes' must be a list of regex strings")
+    try:
+        return tuple(re.compile(item) for item in raw)
+    except re.error as exc:
+        raise ConfigError(f"config: invalid regex in 'context_classes': {exc.msg}") from None
 
 
 def parse_config(data: Mapping[str, Any], source: Path | None) -> Config:
@@ -266,6 +368,9 @@ def parse_config(data: Mapping[str, Any], source: Path | None) -> Config:
     censor_entries = data.get("censor", list(DEFAULT_CENSOR))
     if not isinstance(censor_entries, list):
         raise ConfigError("config: 'censor' must be an array of tables")
+    context_classes = _parse_context_classes(
+        data.get("context_classes", list(DEFAULT_CONTEXT_CLASSES))
+    )
     return Config(
         source=source,
         store_dir=Path(_typed(data, "store_dir", str, DEFAULT_STORE_DIR, "config")).expanduser(),
@@ -275,6 +380,10 @@ def parse_config(data: Mapping[str, Any], source: Path | None) -> Config:
         wifi_labels=dict(labels),
         media_placeholders=frozenset(placeholders),
         censor_rules=tuple(_parse_censor_entry(e, i) for i, e in enumerate(censor_entries)),
+        context_enabled=_typed(data, "context_enabled", bool, True, "config"),
+        context_classes=context_classes,
+        path_labels=_parse_path_labels(data.get("path_label", [])),
+        url_source=_parse_url_source(data.get("url_source")),
     )
 
 
@@ -294,18 +403,22 @@ def load_config(explicit: Path | None) -> Config:
     return parse_config(data, path)
 
 
-def _first_rule(rules: Sequence[CensorRule], window_class: str | None, title: str | None) -> CensorRule | None:
+def _first_rule(
+    rules: Sequence[CensorRule], window_class: str | None, title: str | None, host: str | None = None
+) -> CensorRule | None:
     """First matching rule wins."""
     for rule in rules:
-        if rule.matches(window_class, title):
+        if rule.matches(window_class, title, host):
             return rule
     return None
 
 
-def _rule_number(rules: Sequence[CensorRule], window_class: str | None, title: str | None) -> int | None:
+def _rule_number(
+    rules: Sequence[CensorRule], window_class: str | None, title: str | None, host: str | None = None
+) -> int | None:
     """1-based index of the first matching rule, for status output that must not show titles."""
     for number, rule in enumerate(rules, start=1):
-        if rule.matches(window_class, title):
+        if rule.matches(window_class, title, host):
             return number
     return None
 
@@ -654,6 +767,7 @@ class _Window:
     window_class: str
     title: str
     workspace: str | None
+    pid: int | None = None
 
 
 @dataclasses.dataclass
@@ -662,6 +776,9 @@ class _OpenSpan:
     title: str
     started: float
     workspace: str | None
+    proc: str | None = None
+    path: str | None = None
+    context_done: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -685,10 +802,20 @@ def _url_host(url: str | None) -> str | None:
 class Recorder:
     """Turns Hyprland events and sensor samples into privacy-filtered records."""
 
-    def __init__(self, config: Config, store: Store, clock: Callable[[], float] = time.time) -> None:
+    def __init__(
+        self,
+        config: Config,
+        store: Store,
+        clock: Callable[[], float] = time.time,
+        *,
+        pid_lookup: Callable[[str], int | None] | None = None,
+        proc_root: Path = Path("/proc"),
+    ) -> None:
         self._config = config
         self._store = store
         self._clock = clock
+        self._pid_lookup = pid_lookup
+        self._proc_root = proc_root
         self._handlers: dict[str, Callable[[str], None]] = {
             "activewindow": self._on_activewindow,
             "activewindowv2": self._on_activewindowv2,
@@ -733,6 +860,10 @@ class Recorder:
         self._focus_addr = _normalise_address(data) or None
         if self._span is not None:
             self._span.workspace = self._workspace_for(self._focus_addr)
+            if not self._span.context_done:
+                # The span opened on `activewindow`, before the address was
+                # known; resolve the process context now that we have it.
+                self._fill_context(self._span)
 
     def _on_openwindow(self, data: str) -> None:
         fields = data.split(",", 3)
@@ -783,8 +914,12 @@ class Recorder:
         for client in clients:
             address = _normalise_address(str(client.get("address", "")))
             if address:
+                pid = client.get("pid")
                 self._windows[address] = _Window(
-                    str(client.get("class", "")), str(client.get("title", "")), _workspace_name(client)
+                    str(client.get("class", "")),
+                    str(client.get("title", "")),
+                    _workspace_name(client),
+                    pid if isinstance(pid, int) and pid > 0 else None,
                 )
         # An empty activewindow means nothing is focused; clear any stale focus.
         self._focus_addr = _normalise_address(str(active.get("address", ""))) or None
@@ -805,6 +940,44 @@ class Recorder:
         self._close_span()
         self._open_span_if_allowed()
 
+    def _context_for(self, window_class: str, address: str | None) -> tuple[bool, str | None, str | None]:
+        """(resolved, proc, path_label) for a terminal/editor window.
+
+        resolved=False means the pid is not known yet (the window address has not
+        arrived); the caller retries once it does. For non-context classes it is
+        (True, None, None) — nothing to resolve, ever. The raw cwd is never
+        stored — only the label a [[path_label]] rule maps it to.
+        """
+        if not self._config.context_enabled:
+            return True, None, None
+        if not any(rx.search(window_class or "") for rx in self._config.context_classes):
+            return True, None, None
+        pid: int | None = None
+        if self._pid_lookup is not None and address:
+            pid = self._pid_lookup(address)
+        if pid is None and address:
+            window = self._windows.get(address)
+            pid = window.pid if window is not None else None
+        if pid is None:
+            self.stats["context_no_pid"] += 1
+            return False, None, None
+        context = read_proc_context(pid, self._proc_root)
+        self.stats["context_resolved"] += 1
+        label = None
+        if context.cwd:
+            for rule in self._config.path_labels:
+                if rule.match.search(context.cwd):
+                    label = rule.label
+                    break
+            self.stats["context_path_labelled"] += label is not None
+        return True, context.proc, label
+
+    def _fill_context(self, span: _OpenSpan) -> None:
+        resolved, proc, path = self._context_for(span.window_class, self._focus_addr)
+        if resolved:
+            span.proc, span.path = proc, path
+            span.context_done = True
+
     def _open_span_if_allowed(self, at: float | None = None) -> None:
         if self._span is not None or self.idle or self.locked:
             return
@@ -816,6 +989,7 @@ class Recorder:
             self._boundary(at),
             self._workspace_for(self._focus_addr),
         )
+        self._fill_context(self._span)
 
     def _boundary(self, at: float | None) -> float:
         """A span boundary. A control record's own timestamp is used when it is
@@ -844,6 +1018,10 @@ class Recorder:
             "title": span.title,
             "workspace": span.workspace,
         }
+        if span.proc:
+            record["proc"] = span.proc
+        if span.path:
+            record["path"] = span.path
         if rule is not None:
             record["title"] = rule.replacement
             record["redacted"] = True
@@ -965,6 +1143,58 @@ class Recorder:
             del self._media_state[gone]
             self._store.append({"ts": now, "type": "media", "player": gone, "status": "closed"})
             self.stats["media_records"] += 1
+
+    # -- browser tab URLs ----------------------------------------------------
+
+    def record_url(self, payload: Mapping[str, Any]) -> None:
+        """Persist one active-tab report from the browser extension.
+
+        The host is always stored (it is what drives domain-based categories).
+        Title and channel go through the same censor rules as everything else —
+        including match_host — and are suppressed entirely while a private
+        browser window is open anywhere, exactly like media titles.
+        """
+        raw_url = payload.get("url")
+        host = payload.get("host") or _url_host(raw_url if isinstance(raw_url, str) else None)
+        host = str(host) if host else None
+        if not host:
+            self.stats["url_records_dropped"] += 1
+            return
+        title = payload.get("title")
+        title = str(title) if isinstance(title, str) and title else None
+        if title:
+            title = title[:PAGE_TITLE_MAX]
+        channel = payload.get("channel")
+        channel = str(channel) if isinstance(channel, str) and channel else None
+        if channel:
+            channel = channel[:PAGE_TITLE_MAX]
+        browser = payload.get("browser")
+        browser = str(browser) if isinstance(browser, str) and browser else None
+
+        rule = _first_rule(self._config.censor_rules, None, title or "", host)
+        if rule is not None and rule.action == "drop":
+            self.stats["url_records_dropped"] += 1
+            return
+        if self._dropped_window_open():
+            # A private window is open: keep the host (needed for the school
+            # domain rule) but never the page title or channel.
+            self.stats["url_records_private"] += 1
+            title = None
+            channel = None
+        elif rule is not None and rule.action == "redact":
+            title = rule.replacement
+            channel = None
+            self.stats["url_records_redacted"] += 1
+
+        record: dict[str, Any] = {"ts": self._clock(), "type": "url", "host": host}
+        if title:
+            record["title"] = title
+        if channel:
+            record["channel"] = channel
+        if browser:
+            record["browser"] = browser
+        self._store.append(record)
+        self.stats["url_records"] += 1
 
     # -- wifi, resources ----------------------------------------------------
 
@@ -1282,6 +1512,157 @@ class ResourceSampler:
 
 
 # ---------------------------------------------------------------------------
+# Process context: what a window's terminal is actually running, and where
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class ProcContext:
+    """proc = foreground command's comm (e.g. 'hx', 'fish'), cwd = its working dir.
+
+    Both are None when the process cannot be inspected (gone, or no /proc access).
+    """
+
+    proc: str | None
+    cwd: str | None
+
+
+@dataclasses.dataclass(frozen=True)
+class _ProcStat:
+    pid: int
+    comm: str
+    ppid: int
+    pgid: int
+    session: int
+    tty_nr: int
+    tpgid: int
+
+
+def _parse_proc_stat(text: str) -> _ProcStat | None:
+    """Parse /proc/<pid>/stat. comm is parenthesised and may contain spaces/'('."""
+    left = text.find("(")
+    right = text.rfind(")")
+    if left < 0 or right < 0 or right < left:
+        return None
+    try:
+        pid = int(text[:left].strip())
+    except ValueError:
+        return None
+    comm = text[left + 1 : right]
+    rest = text[right + 1 :].split()
+    # rest: state ppid pgrp session tty_nr tpgid ...
+    if len(rest) < 6:
+        return None
+    try:
+        state, ppid, pgid, session, tty_nr, tpgid = (
+            rest[0], int(rest[1]), int(rest[2]), int(rest[3]), int(rest[4]), int(rest[5])
+        )
+    except ValueError:
+        return None
+    del state
+    return _ProcStat(pid, comm, ppid, pgid, session, tty_nr, tpgid)
+
+
+def _process_table(proc_root: Path) -> dict[int, _ProcStat]:
+    """pid -> _ProcStat for every readable /proc/<pid>/stat."""
+    table: dict[int, _ProcStat] = {}
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError:
+        return table
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        text = _read_text(entry / "stat")
+        if text is None:
+            continue
+        stat = _parse_proc_stat(text)
+        if stat is not None:
+            table[stat.pid] = stat
+    return table
+
+
+def _descendants(root: int, table: Mapping[int, _ProcStat]) -> set[int]:
+    """root plus every process reachable downward through ppid."""
+    children: dict[int, list[int]] = {}
+    for pid, stat in table.items():
+        children.setdefault(stat.ppid, []).append(pid)
+    out: set[int] = set()
+    stack = [root]
+    while stack:
+        pid = stack.pop()
+        if pid in out:
+            continue
+        out.add(pid)
+        stack.extend(children.get(pid, ()))
+    return out
+
+
+def _readlink(path: Path) -> str | None:
+    try:
+        return os.readlink(path)
+    except OSError:
+        return None
+
+
+def read_proc_context(pid: int, proc_root: Path = Path("/proc")) -> ProcContext:
+    """Resolve what a window's terminal is running in the foreground, and its cwd.
+
+    The window pid is the terminal emulator (foot). It forks a shell that owns the
+    pty; the shell runs the foreground command in its own process group. The
+    kernel already tracks the tty's foreground group (tpgid), so we use that
+    instead of guessing by depth: find a descendant that owns a controlling tty,
+    take its tpgid, then report the process whose pgid == tpgid (the foreground
+    group leader — the command, or the shell at a prompt). For a plain GUI app
+    (no tty descendant) the window process itself is the answer.
+    """
+    table = _process_table(proc_root)
+    if pid not in table:
+        return ProcContext(None, None)
+    members = _descendants(pid, table)
+    fg_pgid: int | None = None
+    for member in members:
+        if member == pid:
+            continue  # the emulator's own tty (if any) is its parent's, not the pty
+        stat = table[member]
+        if stat.tty_nr:
+            fg_pgid = stat.tpgid
+            break
+    target: int | None = None
+    if fg_pgid and fg_pgid > 0:
+        if fg_pgid in members and table[fg_pgid].pgid == fg_pgid:
+            target = fg_pgid  # the foreground group leader is the command
+        else:
+            in_group = [m for m in members if table[m].pgid == fg_pgid]
+            if in_group:
+                target = min(in_group)
+    if target is None:
+        target = pid  # GUI app (or nothing foreground): the window process itself
+    comm = table[target].comm
+    cwd = _readlink(proc_root / str(target) / "cwd")
+    return ProcContext(comm or None, cwd)
+
+
+def read_client_pids(instance: str | None) -> dict[str, int]:
+    """address -> pid for every open window, from `hyprctl -j clients`."""
+    env = dict(os.environ)
+    if instance:
+        env["HYPRLAND_INSTANCE_SIGNATURE"] = instance
+    clients = _hyprctl_json(["clients"], env)
+    if not isinstance(clients, list):
+        raise SensorUnavailable("hyprctl clients returned an unexpected shape")
+    out: dict[str, int] = {}
+    for client in clients:
+        if not isinstance(client, dict):
+            continue
+        address = _normalise_address(str(client.get("address", "")))
+        pid = client.get("pid")
+        if address and isinstance(pid, int) and pid > 0:
+            out[address] = pid
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Single-instance lock, control socket, status file
 # ---------------------------------------------------------------------------
 
@@ -1360,6 +1741,104 @@ def read_status_file(path: Path) -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
+# Browser tab URL ingest (loopback HTTP for the companion extension)
+# ---------------------------------------------------------------------------
+
+
+class _UrlHandler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = "hyprmon"  # no version leak
+    sys_version = ""  # suppress the Python version in the Server header
+
+    # Privacy: never log request lines (they carry the URL/title) to the journal.
+    def log_message(self, _format: str, *args: Any) -> None:
+        pass
+
+    def _reply(self, code: int, payload: Mapping[str, Any], *, close: bool = False) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        if close:
+            # An early rejection that left the request body unread would corrupt
+            # the next request on a keep-alive connection. Close instead.
+            self.close_connection = True
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        if close:
+            self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802 (stdlib naming)
+        if self.path.split("?", 1)[0].rstrip("/") in ("", "/health"):
+            self._reply(200, {"ok": True})
+        else:
+            self._reply(404, {"ok": False}, close=True)
+
+    def do_POST(self) -> None:  # noqa: N802
+        if self.path.split("?", 1)[0].rstrip("/") != "/url":
+            self._reply(404, {"ok": False}, close=True)
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0 or length > URL_MAX_BODY:
+            self._reply(413, {"ok": False, "error": "bad length"}, close=True)
+            return
+        body = self.rfile.read(length)  # consume the body before any rejection
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            self._reply(400, {"ok": False, "error": "bad json"})
+            return
+        if not isinstance(payload, dict):
+            self._reply(400, {"ok": False, "error": "bad payload"})
+            return
+        server = self.server
+        token = getattr(server, "token", "")
+        if token and self.headers.get("X-Hyprmon-Token", "") != token:
+            self._reply(401, {"ok": False, "error": "bad token"})
+            return
+        server.submit(payload)  # type: ignore[attr-defined]
+        self._reply(200, {"ok": True})
+
+
+class UrlServer:
+    """Loopback HTTP endpoint the browser extension reports the active tab to.
+
+    Runs on a daemon thread. ``submit`` is invoked on the handler thread with the
+    parsed payload; it must be thread-safe (the daemon side enqueues + wakes).
+    The listener binds 127.0.0.1 only and is never reachable off the machine.
+    """
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        token: str,
+        submit: Callable[[Mapping[str, Any]], None],
+    ) -> None:
+        self._httpd = http.server.ThreadingHTTPServer((host, port), _UrlHandler)
+        self._httpd.daemon_threads = True
+        self._httpd.token = token  # type: ignore[attr-defined]
+        self._httpd.submit = submit  # type: ignore[attr-defined]
+        self._thread = threading.Thread(target=self._httpd.serve_forever, name="hyprmon-url", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+        LOG.info("url ingest listening on %s:%d", *self._httpd.server_address[:2])
+
+    def stop(self) -> None:
+        self._httpd.shutdown()
+        self._httpd.server_close()
+        self._thread.join(timeout=2.0)
+
+    @property
+    def port(self) -> int:
+        return int(self._httpd.server_address[1])
+
+
+# ---------------------------------------------------------------------------
 # Daemon
 # ---------------------------------------------------------------------------
 
@@ -1387,9 +1866,12 @@ class Daemon:
         self._clock = clock
         self._dir = state_dir if state_dir is not None else ipc_dir()
         self._store = Store(config.store_dir)
-        self._recorder = Recorder(config, self._store, clock)
+        self._recorder = Recorder(config, self._store, clock, pid_lookup=self._pid_lookup)
         self._events = EventStream(socket_override, clock)
         self._samples = ResourceSampler(config.battery_path)
+        self._url_server: UrlServer | None = None
+        self._url_queue: queue.SimpleQueue[Mapping[str, Any]] = queue.SimpleQueue()
+        self._pid_cache: dict[str, int] = {}
         self._stop = False
         self._started = clock()
         self._lock_fd: int | None = None
@@ -1454,10 +1936,23 @@ class Daemon:
         now = self._clock()
         for task in self._tasks:
             task.due = now
+        if self._config.url_source.enabled:
+            try:
+                self._url_server = UrlServer(
+                    self._config.url_source.host,
+                    self._config.url_source.port,
+                    self._config.url_source.token,
+                    self._on_url_report,
+                )
+                self._url_server.start()
+            except OSError as exc:
+                self._warn_once("url_server", f"url ingest could not bind: {exc}")
+                self._url_server = None
         LOG.info(
-            "started; %d censor rule(s), retention %d day(s)",
+            "started; %d censor rule(s), retention %d day(s), url ingest %s",
             len(self._config.censor_rules),
             self._config.retention_days,
+            f"on :{self._url_server.port}" if self._url_server else "disabled",
         )
 
     # -- loop ---------------------------------------------------------------
@@ -1477,6 +1972,7 @@ class Daemon:
             ready = select.select(watched, [], [], self._sleep_seconds())[0]
             if self._wake_r in ready:
                 self._drain_wakeup()
+            self._drain_url()
             if self._control.fileno() in ready:
                 self._drain_control()
             if self._events.connected and self._events.fileno() in ready:
@@ -1532,7 +2028,48 @@ class Daemon:
             self._warn_once("seed", f"could not read initial window state: {exc}")
             return
         self._recorder.seed(clients, active)
+        self._pid_cache.clear()
         self._status_dirty = True
+
+    # -- process context and URL ingest ------------------------------------
+
+    def _pid_lookup(self, address: str) -> int | None:
+        """Window address -> pid, via a cached `hyprctl -j clients` snapshot.
+
+        Only terminal/editor focus opens call this (context_classes), and the
+        cache is refreshed wholesale on a miss, so repeated focus is free.
+        """
+        if not address:
+            return None
+        if address in self._pid_cache:
+            return self._pid_cache[address]
+        try:
+            self._pid_cache = read_client_pids(self._events.instance)
+        except SensorUnavailable as exc:
+            self._warn_once("pid_lookup", f"could not read client pids: {exc}")
+            return None
+        return self._pid_cache.get(address)
+
+    def _wake(self) -> None:
+        if self._wake_w >= 0:
+            try:
+                os.write(self._wake_w, b"u")
+            except (BlockingIOError, OSError):
+                pass
+
+    def _on_url_report(self, payload: Mapping[str, Any]) -> None:
+        # Called on the URL server's handler thread: enqueue + wake the loop.
+        self._url_queue.put(payload)
+        self._wake()
+
+    def _drain_url(self) -> None:
+        while True:
+            try:
+                payload = self._url_queue.get_nowait()
+            except queue.Empty:
+                return
+            self._guard("url", lambda: self._recorder.record_url(payload))
+            self._status_dirty = True
 
     def _read_events(self) -> None:
         lines = self._events.read_lines()
@@ -1642,6 +2179,7 @@ class Daemon:
             "updated": self._clock(),
             "instance": self._events.instance,
             "socket_connected": self._events.connected,
+            "url_ingest_port": self._url_server.port if self._url_server else None,
             **self._recorder.snapshot(),
         }
         _atomic_write_json(self._dir / STATUS_FILE_NAME, payload)
@@ -1652,6 +2190,9 @@ class Daemon:
             self._recorder.flush()
         except OSError as exc:
             LOG.error("could not write the open span (%s)", type(exc).__name__)
+        if self._url_server is not None:
+            self._url_server.stop()
+            self._url_server = None
         self._events.close()
         LOG.info("stopped; stats %s", json.dumps(self._stats(), sort_keys=True))
         if self._control is not None:
@@ -1707,6 +2248,12 @@ def _describe_record(record: Mapping[str, Any]) -> str:
         detail = f"{record.get('player', '?')} {record.get('status', '?')}"
         if "url_host" in record:
             detail += f" (host {record['url_host']})"
+    elif kind == "url":
+        # Hosts and channels are safe to show; page titles never are.
+        detail = f"host={record.get('host', '?')}"
+        hidden = [k for k in ("title", "channel") if record.get(k)]
+        if hidden:
+            detail += " (" + "+".join(hidden) + " present, not shown)"
     elif kind == "wifi":
         detail = f"label={record.get('label')}"
     elif kind == "resources":
@@ -1745,6 +2292,8 @@ def cmd_status(config: Config, socket_override: Path | None) -> int:
             print(f"socket link:    {'connected' if snapshot.get('socket_connected') else 'disconnected'}")
             print(f"idle / locked:  {bool(snapshot.get('idle'))} / {bool(snapshot.get('locked'))}")
             _print_focus(snapshot.get("focus"))
+            url_port = snapshot.get("url_ingest_port")
+            print(f"url ingest:     {'on :' + str(url_port) if url_port else 'disabled'}")
     print(f"store:          {config.store_dir}")
     print("last 5 events:")
     records = Store(config.store_dir).tail(5)
@@ -1817,6 +2366,24 @@ def cmd_doctor(config_path: Path | None, socket_override: Path | None) -> int:
             report("ok", label, "responds")
         except SensorUnavailable as exc:
             report("warn", label, str(exc))
+
+    # Process context (proc + cwd for terminals): a /proc read must work.
+    self_ctx = read_proc_context(os.getpid())
+    if self_ctx.proc:
+        report("ok", "proc context", f"/proc readable (resolved comm {self_ctx.proc!r})")
+    else:
+        report("warn", "proc context", "could not read /proc; terminal proc/cwd labels disabled")
+
+    if config.url_source.enabled:
+        report("ok", "url ingest",
+               f"configured on {config.url_source.host}:{config.url_source.port} "
+               f"({'token' if config.url_source.token else 'no token'})")
+    else:
+        report("warn", "url ingest", "disabled; browser channel/URL stats will be empty")
+    if config.path_labels:
+        report("ok", "path labels", f"{len(config.path_labels)} rule(s)")
+    else:
+        report("warn", "path labels", "none; school-by-path detection is off")
 
     if config.battery_path.is_dir():
         report("ok", "battery", f"{config.battery_path} present")

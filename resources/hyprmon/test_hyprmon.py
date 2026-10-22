@@ -7,6 +7,7 @@ These use only the standard library and a temporary store, so they never touch
 from __future__ import annotations
 
 import gzip
+import http.client
 import json
 import os
 import socket
@@ -423,6 +424,229 @@ class EventStreamTests(unittest.TestCase):
             self.assertFalse(stream.connected)
             stream.close()
             server.close()
+
+
+class ProcStatParsingTests(unittest.TestCase):
+    def test_comm_with_spaces_and_parens(self) -> None:
+        stat = h._parse_proc_stat("123 (my weird (app)) S 100 123 123 34816 300 0 0")
+        self.assertIsNotNone(stat)
+        self.assertEqual(stat.pid, 123)
+        self.assertEqual(stat.comm, "my weird (app)")
+        self.assertEqual(stat.ppid, 100)
+        self.assertEqual(stat.pgid, 123)
+        self.assertEqual(stat.tty_nr, 34816)
+        self.assertEqual(stat.tpgid, 300)
+
+    def test_malformed_stat_is_none(self) -> None:
+        self.assertIsNone(h._parse_proc_stat("garbage"))
+        self.assertIsNone(h._parse_proc_stat("1 (x) S 2"))
+
+
+def _write_proc(root: Path, pid: int, comm: str, ppid: int, pgid: int,
+                session: int, tty_nr: int, tpgid: int, cwd: str | None = None) -> None:
+    d = root / str(pid)
+    d.mkdir(parents=True, exist_ok=True)
+    # /proc/<pid>/stat: pid (comm) state ppid pgrp session tty_nr tpgid ...
+    (d / "stat").write_text(
+        f"{pid} ({comm}) S {ppid} {pgid} {session} {tty_nr} {tpgid} "
+        + " ".join(["0"] * 20),
+        encoding="utf-8",
+    )
+    if cwd is not None:
+        (d / "cwd").symlink_to(cwd)
+
+
+class ProcContextTests(unittest.TestCase):
+    def _root(self, d: str) -> Path:
+        return Path(d)
+
+    def test_terminal_running_hx_reports_hx_and_its_cwd(self) -> None:
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            root = self._root(d)
+            # foot (emulator) -> fish (shell, owns pty) -> hx (foreground, own pgid)
+            _write_proc(root, 100, "foot", 1, 100, 100, 0, -1)
+            _write_proc(root, 200, "fish", 100, 200, 200, 34816, 300)
+            _write_proc(root, 300, "hx", 200, 300, 200, 34816, 300,
+                        cwd="/home/u/Documents/school")
+            ctx = h.read_proc_context(100, root)
+            self.assertEqual(ctx.proc, "hx")
+            self.assertEqual(ctx.cwd, "/home/u/Documents/school")
+
+    def test_terminal_at_prompt_reports_the_shell(self) -> None:
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            root = self._root(d)
+            _write_proc(root, 100, "foot", 1, 100, 100, 0, -1)
+            # fish is its own foreground group at a prompt (pgid == tpgid == 200)
+            _write_proc(root, 200, "fish", 100, 200, 200, 34816, 200,
+                        cwd="/home/u/nixos")
+            ctx = h.read_proc_context(100, root)
+            self.assertEqual(ctx.proc, "fish")
+            self.assertEqual(ctx.cwd, "/home/u/nixos")
+
+    def test_gui_app_reports_itself_not_a_helper(self) -> None:
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            root = self._root(d)
+            _write_proc(root, 400, "code", 1, 400, 400, 0, -1, cwd="/home/u/proj")
+            _write_proc(root, 401, "zygote", 400, 401, 400, 0, -1)
+            ctx = h.read_proc_context(400, root)
+            self.assertEqual(ctx.proc, "code")
+            self.assertEqual(ctx.cwd, "/home/u/proj")
+
+    def test_missing_pid_is_graceful(self) -> None:
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            ctx = h.read_proc_context(999, self._root(d))
+            self.assertIsNone(ctx.proc)
+            self.assertIsNone(ctx.cwd)
+
+
+class UrlRecordTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.clock = FakeClock()
+        self.store = _NullStore()
+
+    def _recorder(self, cfg: h.Config) -> h.Recorder:
+        return h.Recorder(cfg, self.store, self.clock)
+
+    def test_url_stores_host_title_and_channel(self) -> None:
+        rec = self._recorder(make_config(censor=[]))
+        rec.record_url({"host": "www.youtube.com", "title": "Cool Video",
+                        "channel": "Some Channel", "browser": "zen-beta"})
+        recs = self.store.records
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["type"], "url")
+        self.assertEqual(recs[0]["host"], "www.youtube.com")
+        self.assertEqual(recs[0]["title"], "Cool Video")
+        self.assertEqual(recs[0]["channel"], "Some Channel")
+
+    def test_host_extracted_from_url_when_not_given(self) -> None:
+        rec = self._recorder(make_config(censor=[]))
+        rec.record_url({"url": "https://fit.cvut.cz/cs/obory", "title": "FIT"})
+        self.assertEqual(self.store.records[0]["host"], "fit.cvut.cz")
+
+    def test_url_without_host_is_dropped(self) -> None:
+        rec = self._recorder(make_config(censor=[]))
+        rec.record_url({"title": "no host here"})
+        self.assertEqual(self.store.records, [])
+        self.assertEqual(rec.stats["url_records_dropped"], 1)
+
+    def test_host_censor_drop_rule_discards_url(self) -> None:
+        cfg = make_config(censor=[{"match_host": r"(^|\.)bank\.cz$", "action": "drop"}])
+        rec = self._recorder(cfg)
+        rec.record_url({"host": "secure.bank.cz", "title": "Account"})
+        self.assertEqual(self.store.records, [])
+        self.assertEqual(rec.stats["url_records_dropped"], 1)
+
+    def test_host_censor_redact_replaces_title(self) -> None:
+        cfg = make_config(censor=[{"match_host": r"secret\.site", "action": "redact",
+                                   "replacement": "[private]"}])
+        rec = self._recorder(cfg)
+        rec.record_url({"host": "secret.site", "title": "Sensitive", "channel": "X"})
+        recs = self.store.records
+        self.assertEqual(recs[0]["title"], "[private]")
+        self.assertNotIn("channel", recs[0])
+
+    def test_title_suppressed_while_private_window_open_but_host_kept(self) -> None:
+        # Default censor includes the "Private Browsing" drop rule; keep it on.
+        rec = self._recorder(make_config())
+        # A private window is open somewhere (not focused).
+        rec.handle_hypr_event("openwindow", "0x1,1,firefox,Secret - Private Browsing")
+        rec.record_url({"host": "www.youtube.com", "title": "Cool Video", "channel": "Chan"})
+        recs = self.store.records
+        self.assertEqual(recs[0]["host"], "www.youtube.com")
+        self.assertNotIn("title", recs[0])
+        self.assertNotIn("channel", recs[0])
+        self.assertEqual(rec.stats["url_records_private"], 1)
+
+    def test_title_truncated_to_limit(self) -> None:
+        rec = self._recorder(make_config(censor=[]))
+        rec.record_url({"host": "x.cz", "title": "a" * 500})
+        self.assertEqual(len(self.store.records[0]["title"]), h.PAGE_TITLE_MAX)
+
+
+class ContextSpanTests(unittest.TestCase):
+    """A terminal span carries proc + path label, resolved at span open."""
+
+    def test_span_records_proc_and_path_label(self) -> None:
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as d:
+            root = Path(d)
+            _write_proc(root, 100, "foot", 1, 100, 100, 0, -1)
+            _write_proc(root, 200, "hx", 100, 200, 100, 34816, 200,
+                        cwd="/home/u/Documents/school/hw")
+            cfg = make_config(
+                censor=[],
+                path_label=[{"match": r"/Documents/school", "label": "school"}],
+            )
+            clock = FakeClock()
+            store = _NullStore()
+            rec = h.Recorder(cfg, store, clock,
+                             pid_lookup=lambda addr: 100, proc_root=root)
+            rec.handle_hypr_event("activewindow", "foot,hx")
+            rec.handle_hypr_event("activewindowv2", "55aa")  # supplies the address
+            clock.advance(30)
+            rec.handle_hypr_event("activewindow", "firefox,Browser")
+            span = store.records[0]
+            self.assertEqual(span["type"], "span")
+            self.assertEqual(span["proc"], "hx")
+            self.assertEqual(span["path"], "school")
+
+    def test_non_context_class_gets_no_proc(self) -> None:
+        cfg = make_config(censor=[])
+        clock = FakeClock()
+        store = _NullStore()
+        called = []
+        rec = h.Recorder(cfg, store, clock,
+                         pid_lookup=lambda addr: called.append(addr) or 1)
+        rec.handle_hypr_event("activewindow", "firefox,Page")
+        clock.advance(10)
+        rec.handle_hypr_event("activewindow", "foot,x")
+        self.assertEqual(called, [])  # firefox is not in context_classes: no pid lookup
+        self.assertNotIn("proc", store.records[0])
+
+
+class UrlServerTests(unittest.TestCase):
+    def test_post_url_calls_submit_and_health_works(self) -> None:
+        received: list[dict] = []
+        server = h.UrlServer("127.0.0.1", 0, "", received.append)
+        server.start()
+        try:
+            port = server.port
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+            body = json.dumps({"host": "www.youtube.com", "title": "V", "channel": "C"})
+            conn.request("POST", "/url", body=body, headers={"Content-Type": "application/json"})
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 200)
+            resp.read()
+            conn.request("GET", "/health")
+            self.assertEqual(conn.getresponse().status, 200)
+            conn.close()
+            # submit runs on the handler thread; give it a beat.
+            for _ in range(50):
+                if received:
+                    break
+                time.sleep(0.02)
+            self.assertEqual(len(received), 1)
+            self.assertEqual(received[0]["host"], "www.youtube.com")
+        finally:
+            server.stop()
+
+    def test_bad_token_is_rejected(self) -> None:
+        received: list[dict] = []
+        server = h.UrlServer("127.0.0.1", 0, "sekrit", received.append)
+        server.start()
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=2)
+            conn.request("POST", "/url", body="{}", headers={"Content-Type": "application/json"})
+            resp = conn.getresponse()
+            resp.read()
+            self.assertEqual(resp.status, 401)
+            conn.request("POST", "/url", body="{}",
+                         headers={"Content-Type": "application/json", "X-Hyprmon-Token": "sekrit"})
+            resp = conn.getresponse()
+            resp.read()
+            self.assertEqual(resp.status, 200)
+            conn.close()
+        finally:
+            server.stop()
 
 
 if __name__ == "__main__":

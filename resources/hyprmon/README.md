@@ -86,7 +86,8 @@ Every record is one JSON object per line, in a gzip file per local day:
 
 | `type` | Fields | Notes |
 |---|---|---|
-| `span` | `start_ts`, `end_ts`, `class`, `title`, `workspace` | A focus span. Redacted spans carry `"redacted": true`. |
+| `span` | `start_ts`, `end_ts`, `class`, `title`, `workspace`, `proc?`, `path?` | A focus span. `proc` = foreground command (hx, bash), `path` = a `[[path_label]]` label (never the raw cwd). Redacted spans carry `"redacted": true`. |
+| `url` | `host`, `title?`, `channel?`, `browser?` | From the browser extension. `host` always; `title`/`channel` only when safe. |
 | `media` | `player`, `status`, `title?`, `url_host?` | `title` and `url_host` only when safe (see privacy). |
 | `wifi` | `label` | `ssid` only with `store_raw_ssid = true`. |
 | `resources` | `cpu_pct`, `mem_available_mb`, `battery_pct`, `battery_power_w`, `battery_status` | Null when a source is missing. |
@@ -94,6 +95,45 @@ Every record is one JSON object per line, in a gzip file per local day:
 
 Records older than `retention_days` (default 14) are deleted at startup and at
 each midnight.
+
+## Process context (foot/hx, school-by-path)
+
+For terminals and editors (`context_classes`), hyprmon follows the kernel's
+foreground process group to find what the window is actually running and where:
+
+- **`proc`** — the foreground command's name (`hx`, `bash`, `python3`, …). This
+  is what turns a bare `foot` into `foot/hx` in the report, so a coding session
+  is its own category instead of "terminal".
+- **`path`** — a label from the first matching `[[path_label]]` regex against the
+  process's working directory. So a terminal running `hx` inside
+  `~/Documents/school` is labelled `school`, and the report counts it as school
+  work. The raw path is never stored.
+
+Turn it off with `context_enabled = false`. The doctor's `proc context` line
+confirms `/proc` is readable.
+
+## Browser extension (channels + domains)
+
+MPRIS alone cannot tell you *which YouTube channel* you watched or that a tab
+was on `fit.cvut.cz`. For that, install the companion WebExtension in Zen:
+
+1. `about:debugging#/runtime/this-firefox` → *Load Temporary Add-on…* → pick
+   `~/.local/share/hyprmon-extension/manifest.json` (or the copy in
+   `resources/hyprmon/extension/`). Temporary add-ons reload after a browser
+   restart; see the note below for a persistent install.
+2. It reports the active tab (`host`, `title`, and the YouTube `channel` read
+   off the page) to `http://127.0.0.1:4319/url` on every tab switch / title
+   change. Nothing leaves your machine. Private/incognito tabs are skipped
+   before anything is sent.
+
+With it the report gains per-**channel** YouTube time and per-**site** tab time,
+and a `cvut.cz` tab is classified as school by domain. Set `[url_source] token`
+to a value (and put the same in `background.js`'s `TOKEN`) to require a token.
+
+## Media services
+
+`[media_services]` maps a player / url host to a service label so YouTube,
+Spotify and the rest are counted separately in the report.
 
 ## Privacy
 
