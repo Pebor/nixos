@@ -1,10 +1,15 @@
 # Settings shared by every NixOS host: bootloader, locale, networking,
 # and a minimal set of system tools (kept for recovery situations).
 {
-  flake.modules.nixos.system = { pkgs, ... }: {
+  flake.modules.nixos.system = { pkgs, lib, ... }: {
     # Bootloader.
     boot.loader.systemd-boot.enable = true;
     boot.loader.efi.canTouchEfiVariables = true;
+
+    # Kernel: upstream 7.2 series from nixpkgs for every host.
+    # mkDefault so a host can still pin another series (t420 uses
+    # linuxPackages_latest) without an option conflict.
+    boot.kernelPackages = lib.mkDefault pkgs.linuxPackages_7_2;
 
     # Networking.
     networking.networkmanager.enable = true;
