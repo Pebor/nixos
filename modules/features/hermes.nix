@@ -86,6 +86,59 @@
         	helper = "!f() { echo password=$GH_TOKEN; }; f"
       '';
 
+      # .env is a DERIVED artifact. secrets.env is the single human-edited
+      # master: every key it declares wins over .env's value — replace, not
+      # just fill gaps. (The old gap-only restore meant an outdated key in
+      # .env survived every rebuild forever and the gateway kept using it,
+      # because env_loader loads .env with override=True.)
+      # Keys secrets.env does NOT declare are left alone:
+      #   BW_SERVICE_*        — hermes tooling config, lives in .env only
+      #   OPENCODE_GO_API_KEY — owned by the service vault via
+      #                         hermes-secrets-sync, so a rate-limited key can
+      #                         be swapped from the Bitwarden UI (no SSH).
+      envSync = pkgs.writeShellScript "hermes-env-sync" ''
+        set -u
+        master=/var/lib/hermes/secrets.env
+        target=/var/lib/hermes/.env
+        if [ ! -f "$master" ]; then
+          echo "env-sync: WARNING $master missing — .env left untouched" >&2
+          exit 0
+        fi
+        [ -f "$target" ] || : > "$target"
+        tmp=$(mktemp)
+        trap 'rm -f "$tmp" "$tmp.new"' EXIT
+        cp "$target" "$tmp"
+        updated=0
+        unchanged=0
+        while IFS= read -r mline; do
+          case "$mline" in
+            [A-Za-z_]*=*)
+              mkey=''${mline%%=*}
+              mval=''${mline#*=}
+              [ -n "$mval" ] || continue
+              cur=$(sed -n "s/^$mkey=//p" "$tmp" | head -1)
+              if [ "$cur" = "$mval" ]; then
+                unchanged=$((unchanged+1))
+                continue
+              fi
+              found=0
+              while IFS= read -r line; do
+                case "$line" in
+                  "$mkey="*) if [ "$found" = 0 ]; then printf '%s=%s\n' "$mkey" "$mval"; found=1; fi ;;
+                  *) printf '%s\n' "$line" ;;
+                esac
+              done < "$tmp" > "$tmp.new"
+              [ "$found" = 0 ] && printf '%s=%s\n' "$mkey" "$mval" >> "$tmp.new"
+              mv "$tmp.new" "$tmp"
+              updated=$((updated+1))
+              echo "env-sync: $mkey updated from secrets.env"
+              ;;
+          esac
+        done < "$master"
+        if [ "$updated" -gt 0 ]; then cat "$tmp" > "$target"; fi
+        echo "env-sync: done: $updated updated, $unchanged unchanged"
+      '';
+
       # Inside the container the state dir is /opt/data (HERMES_HOME).
       sshConfig = pkgs.writeText "hermes-ssh-config" ''
         Host host.docker.internal
@@ -176,7 +229,7 @@
         # Started at boot on its own (NOT pulled in by docker-hermes' old
         # Requires= — see the Requisite note below).
         wantedBy = [ "multi-user.target" ];
-        path = [ pkgs.openssh ];
+        path = [ pkgs.openssh pkgs.coreutils pkgs.gnused ];
         serviceConfig = {
           Type = "oneshot";
           RemainAfterExit = true;
@@ -220,35 +273,12 @@
           pub=$(cat ${stateDir}/home/.ssh/id_ed25519.pub)
           grep -qF "$pub" /home/server/.ssh/authorized_keys || echo "$pub" >> /home/server/.ssh/authorized_keys
 
-          # GAP-RESTORE (the fix that makes secrets survive rebuilds):
           # hermes resolves API keys from $HERMES_HOME/.env as a FILE, so every
           # secret must be PRESENT in .env — env-var injection is not enough.
-          # secrets.env is the read-only master (root:users 440). Before the
-          # container starts, copy any key from secrets.env into .env ONLY if
-          # it's missing/empty there — never overwrite an existing value (so an
-          # old version can't come back). If a secret ever vanishes, the next
-          # rebuild self-heals it.
-          master=${stateDir}/secrets.env
-          target=${stateDir}/.env
-          if [ -f "$master" ]; then
-            touch "$target" 2>/dev/null || true
-            # For each KEY in master, if target lacks KEY=<nonempty>, append it.
-            while IFS= read -r mline; do
-              case "$mline" in
-                [A-Za-z_]*=*)
-                  mkey="''${mline%%=*}"
-                  mval="''${mline#*=}"
-                  [ -n "$mval" ] || continue
-                  grep -q "^$mkey=." "$target" 2>/dev/null && continue
-                  sed -i "/^$mkey=/d" "$target" 2>/dev/null || true
-                  printf '%s\n' "$mline" >> "$target"
-                  ;;
-              esac
-            done < "$master"
-            echo "hermes-seed: gap-restore from secrets.env complete"
-          else
-            echo "hermes-seed: WARNING $master missing — secrets will not self-heal" >&2
-          fi
+          # secrets.env is the read-only master (root:users 440) and .env is
+          # derived from it: a key whose VALUE differs is replaced, so a
+          # rotated key doesn't get stuck behind the stale one in .env.
+          ${envSync} || echo "hermes-seed: WARNING env-sync failed" >&2
 
           # Validate secrets WARN-ONLY. Never `exit 1`: a missing secret used to
           # abort the whole nixos-rebuild (status 4), bricking the switch. Log
@@ -257,8 +287,11 @@
           if [ ! -f "$envFile" ]; then
             echo "hermes-seed: WARNING $envFile missing — container will not start. Create it, then: sudo systemctl restart docker-hermes" >&2
           else
+            # OPENCODE_GO_API_KEY is NOT checked here: the service vault owns it
+            # (hermes-secrets-sync writes it into .env). Check .env directly.
+            grep -q '^OPENCODE_GO_API_KEY=.' ${stateDir}/.env \
+              || echo "hermes-seed: WARNING OPENCODE_GO_API_KEY missing/empty in ${stateDir}/.env — vault sync has not run yet" >&2
             for v in \
-              OPENCODE_GO_API_KEY \
               HERMES_DASHBOARD_BASIC_AUTH_USERNAME \
               HERMES_DASHBOARD_BASIC_AUTH_PASSWORD \
               HERMES_DASHBOARD_BASIC_AUTH_SECRET
@@ -270,6 +303,25 @@
               || echo "hermes-seed: WARNING GH_TOKEN missing — git push will fail" >&2
           fi
         '';
+      };
+
+      # Instant materialization: editing secrets.env rewrites .env within a
+      # second — no rebuild, no restart. The gateway re-reads .env every turn,
+      # so a swapped key is live on the next message.
+      systemd.services.hermes-env-sync = {
+        description = "Materialize hermes secrets.env into .env";
+        path = [ pkgs.coreutils pkgs.gnused ];
+        serviceConfig = {
+          Type = "oneshot";
+          User = "server";
+          Group = "users";
+          ExecStart = "${envSync}";
+        };
+      };
+
+      systemd.paths.hermes-env-sync = {
+        wantedBy = [ "multi-user.target" ];
+        pathConfig.PathModified = [ "${stateDir}/secrets.env" ];
       };
     };
 
