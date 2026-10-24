@@ -117,10 +117,20 @@ confirms `/proc` is readable.
 MPRIS alone cannot tell you *which YouTube channel* you watched or that a tab
 was on `fit.cvut.cz`. For that, install the companion WebExtension in Zen:
 
-1. `about:debugging#/runtime/this-firefox` → *Load Temporary Add-on…* → pick
-   `~/.local/share/hyprmon-extension/manifest.json` (or the copy in
-   `resources/hyprmon/extension/`). Temporary add-ons reload after a browser
-   restart; see the note below for a persistent install.
+1. On NixOS it is installed automatically: the `activity-monitor` HM module
+   packs `resources/hyprmon/extension` into an XPI and, on every switch,
+   installs it into each Zen profile listed in `~/.config/zen/profiles.ini`
+   (`extensions/hyprmon@local.xpi`) plus two prefs in that profile's
+   `user.js` — `xpinstall.signatures.required=false` (the add-on is unsigned;
+   Zen honours the pref, verified on 1.23.2b) and
+   `extensions.autoDisableScopes=0` (without it a sideloaded XPI is registered
+   but left disabled). Result: it survives browser restarts with no
+   `about:debugging` step. To load it by hand instead:
+   `about:debugging#/runtime/this-firefox` → *Load Temporary Add-on…* → pick
+   `~/.local/share/hyprmon-extension/manifest.json` (temporary = gone on
+   restart).
+   Bump `version` in `manifest.json` when the code changes so Zen picks the new
+   XPI up as an update.
 2. It reports the active tab (`host`, `title`, and the YouTube `channel` read
    off the page) to `http://127.0.0.1:4319/url` on every tab switch / title
    change. Nothing leaves your machine. Private/incognito tabs are skipped

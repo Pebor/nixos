@@ -59,9 +59,22 @@
 
     services.resolved.enable = true;
     services.fwupd.enable = true;
-    # Sustained compile loads with the lid closed: let Intel's thermal
-    # daemon manage the CPU.
-    services.thermald.enable = true;
+
+    # Battery health: the pack sat at 100% permanently, which is what kills
+    # Li-poly cells. ThinkPad tpacpi exposes charge thresholds via BAT0, so
+    # hold it at 80% and only start charging again below 75%. udev (not a
+    # boot script) because AC/firmware events re-register the battery device.
+    services.udev.extraRules = ''
+      ACTION=="add|change", SUBSYSTEM=="power_supply", ATTR{type}=="Battery", \
+        ATTR{charge_control_start_threshold}="75", \
+        ATTR{charge_control_end_threshold}="80"
+    '';
+
+    # thermald was enabled here for sustained compile loads, but it never
+    # runs on this box: thinkpad_acpi registers dytc_lapmode and thermald
+    # bails with "Unsupported cpu model or platform" (verified 24.10.: exited
+    # 0 after 19 ms, inactive for hours). Firmware + intel_pstate already do
+    # the throttling, so the unit was dead weight.
 
     # The server's working account (t14's key; ssh-server disables password
     # auth). base/user.nix (the pebor account) is deliberately NOT imported

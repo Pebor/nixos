@@ -18,6 +18,16 @@
       hyprmon-report = pkgs.writeShellScriptBin "hyprmon-report" ''
         ${pathFix}exec ${py} ${../../resources/hyprmon/hyprmon-report.py} "$@"
       '';
+      # Unsigned XPI of the companion extension. Zen 1.23 honours
+      # xpinstall.signatures.required=false, so a profile-local XPI loads on
+      # every start instead of needing about:debugging after each restart.
+      hyprmonExtension = pkgs.runCommand "hyprmon-extension.xpi" {
+        nativeBuildInputs = [ pkgs.zip ];
+      } ''
+        mkdir ext
+        cp -r ${../../resources/hyprmon/extension}/. ext/
+        (cd ext && zip -q -X -r "$out" .)
+      '';
     in
     {
       home.packages = [ hyprmon hyprmon-report ];
@@ -27,8 +37,42 @@
       xdg.configFile."hyprmon/hyprmon.toml".source = ../../resources/hyprmon/config.toml;
 
       # Companion browser extension (active-tab -> channel/URL stats).
-      # Load it unpacked from here in Zen/Helium. See resources/hyprmon/README.md.
+      # Unpacked source kept for dev / manual loading (web-ext run).
       home.file.".local/share/hyprmon-extension".source = ../../resources/hyprmon/extension;
+
+      # Install the extension permanently into every Zen profile it finds.
+      # Zen profile dirs have random names, so they are read from profiles.ini
+      # instead of being hard-coded. Two prefs go into the profile's user.js:
+      # signatures off (unsigned add-on) and autoDisableScopes=0 (otherwise a
+      # sideloaded XPI is registered but left disabled).
+      home.activation.hyprmonZenExtension = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+        zenConfig="$HOME/.config/zen"
+        if [ -f "$zenConfig/profiles.ini" ]; then
+          while IFS= read -r rel; do
+            [ -n "$rel" ] || continue
+            case "$rel" in
+              /*) prof="$rel" ;;
+              *) prof="$zenConfig/$rel" ;;
+            esac
+            [ -d "$prof" ] || continue
+            install -d -m 0700 "$prof/extensions"
+            install -m 0644 ${hyprmonExtension} "$prof/extensions/hyprmon@local.xpi"
+            if ! grep -qF '# >>> hyprmon extension' "$prof/user.js" 2>/dev/null; then
+              {
+                [ -f "$prof/user.js" ] && cat "$prof/user.js"
+                echo '# >>> hyprmon extension (managed by home-manager)'
+                echo 'user_pref("xpinstall.signatures.required", false);'
+                echo 'user_pref("extensions.autoDisableScopes", 0);'
+                echo '# <<< hyprmon extension'
+              } > "$prof/.user.js.new"
+              mv "$prof/.user.js.new" "$prof/user.js"
+            fi
+            echo "hyprmon: extension installed into $prof" >&2
+          done <<HYPRMON_PROFILES
+        $(sed -n 's/^Path=//p' "$zenConfig/profiles.ini")
+        HYPRMON_PROFILES
+        fi
+      '';
 
       # The store dir must exist before the sandboxed service starts:
       # ProtectHome=read-only means the daemon cannot create it itself.

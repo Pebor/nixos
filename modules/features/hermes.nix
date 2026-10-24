@@ -197,6 +197,12 @@
           "--memory=8g"
           "--cpus=6"
           "--add-host=host.docker.internal:host-gateway"
+          # Tailnet-only names (Vikunja tasks.pebor.me etc.) do not resolve in
+          # the container: the host's dnsmasq zone is not visible to docker's
+          # resolver. Pin them to the t490s tailnet IP so MCP clients and curl
+          # work without --resolve. Verified: a plain `curl
+          # https://tasks.pebor.me` inside the container fails without this.
+          "--add-host=tasks.pebor.me:100.103.136.50"
         ];
       };
 
