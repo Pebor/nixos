@@ -234,6 +234,23 @@ explains itself in the journal if `.env` is missing something
   disk, no traffic since 2026-10-17, no service referencing them. Their images
   and volumes were pruned the same day (~5 GB reclaimed).
 
+### Valheim server (live 2026-10-24, world `KTBcz`)
+
+- Compose stack at `~/valheim/` on t490s (`~/valheim/README.md` is the runbook):
+  `ghcr.io/community-valheim-tools/valheim-server:latest`, world imported from
+  the old save (copyparty `KTBcz/`, chunked format -> `config/worlds_local/KTBcz/`),
+  ports published only on the tailnet IP, password in `~/valheim/.env` (600).
+- Public path: Hetzner VPS `lesbian-4gb` runs `valheim-relay.service`
+  (`/usr/local/sbin/valheim-relay-apply`, nftables DNAT 2456-2458/udp ->
+  `100.103.136.50` + MASQUERADE on `tailscale0`). The VPS FORWARD chain drops by
+  default (tailscale), so the flows get explicit ACCEPT rules in `DOCKER-USER`.
+- **Requires `2456-2458/udp` open in the Hetzner Cloud firewall** — port rules
+  there are per-port, so a new service on the VPS is invisible until its ports
+  are added in the Hetzner console (verified 2026-10-24: 80/443/1234-tcp and
+  41641-udp pass, 2456-2458-udp is dropped before the VM's counters).
+- Nightly restic (`~/backup`) includes `~/valheim/config`; the image also keeps
+  its own hourly world zips in `config/backups/`.
+
 ### Later (deliberately not set up yet)
 
 - `nix.settings.max-jobs = 0` on clients for hard offload (no local builds)
