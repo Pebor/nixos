@@ -13,8 +13,23 @@
     services.harmonia.cache = {
       enable = true;
       signKeyPaths = [ "/var/lib/harmonia/cache-key.pem" ];
-      # bind defaults to [::]:5000; firewall below restricts it to tailscale.
+
+      # Bind to the tailnet address, NOT the upstream default [::]:5000.
+      # The module derives the socket's ListenStream from this value, so the
+      # bind itself is the access control. With [::] the cache was on every
+      # interface and the firewall did not stop it (2026-10-25:
+      # http://10.50.104.168:5000/nix-cache-info answered 200 off-tailnet).
+      settings.bind = "100.103.136.50:5000";
       settings.priority = 40;
+    };
+
+    # The socket can only bind once tailscale0 carries its address, so tie it
+    # to tailscaled and let systemd retry the bind if it loses that race.
+    systemd.sockets.harmonia = {
+      after = [ "tailscaled.service" ];
+      wants = [ "tailscaled.service" ];
+      socketConfig.Restart = "on-failure";
+      socketConfig.RestartSec = 5;
     };
 
     # Cache and SSH are reachable over tailscale only — nothing on the LAN.
