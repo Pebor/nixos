@@ -203,12 +203,14 @@
           # by ~/edge/compose.yaml as an external network, so it outlives the
           # stack and must NOT be removed, or the container fails to start.
           "--network=edge_proxy"
-          # Tailnet-only names (Vikunja tasks.pebor.me etc.) do not resolve in
-          # the container: the host's dnsmasq zone is not visible to docker's
-          # resolver. Pin them to the t490s tailnet IP so MCP clients and curl
-          # work without --resolve. Verified: a plain `curl
-          # https://tasks.pebor.me` inside the container fails without this.
-          "--add-host=tasks.pebor.me:100.103.136.50"
+          # Sibling containers on edge_proxy are reached by docker DNS name,
+          # never through Caddy: Vikunja (MCP + REST) lives at
+          # http://vikunja:3456/api — plain HTTP inside the docker network, no
+          # TLS/SNI, no /etc/hosts pin, survives re-creation and IP churn.
+          # The old `--add-host=tasks.pebor.me:100.103.136.50` pin was dropped
+          # 2026-10-25 (card #23): since b167872 put this container on
+          # edge_proxy the tailnet IP is dead from here, so the pin only
+          # shadowed the name with an unreachable address.
         ];
       };
 
