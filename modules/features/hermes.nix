@@ -197,6 +197,12 @@
           "--memory=8g"
           "--cpus=6"
           "--add-host=host.docker.internal:host-gateway"
+          # The dashboard is also published as ai.dash.pebor.me by the edge
+          # Caddy, which proxies to http://hermes:9119 — name resolution needs
+          # this container on the same docker network. edge_proxy is created
+          # by ~/edge/compose.yaml as an external network, so it outlives the
+          # stack and must NOT be removed, or the container fails to start.
+          "--network=edge_proxy"
           # Tailnet-only names (Vikunja tasks.pebor.me etc.) do not resolve in
           # the container: the host's dnsmasq zone is not visible to docker's
           # resolver. Pin them to the t490s tailnet IP so MCP clients and curl
