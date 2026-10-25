@@ -47,6 +47,7 @@
       build-worker
       harmonia
       cache-warm
+      valheim-chat-watcher
     ]);
 
     networking.hostName = "t490s";
