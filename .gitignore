@@ -1,0 +1,3 @@
+# Local-only service map (internal IPs, exposure, gaps). The repo is PUBLIC
+# and INFRA.md is an attack-surface map — it must never be committed.
+INFRA.md
