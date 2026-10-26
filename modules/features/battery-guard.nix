@@ -30,7 +30,7 @@
         BAT=''${BAT_PATH:-/sys/class/power_supply/BAT0}
         STATE=''${STATE_DIR:-/var/lib/battery-guard}
         SECRETS=/var/lib/hermes/secrets.env   # master copy (root:users 0440)
-        T14=pebor@100.86.253.100              # tailnet IP: no DNS in the way
+        T14=''${T14_HOST:-pebor@100.86.253.100}       # tailnet IP: no DNS in the way
         CHAT=1785855177                       # Pebor's DM
         THRESHOLDS="65 50 35 20 10 5"
 
