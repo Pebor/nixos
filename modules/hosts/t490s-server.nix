@@ -44,6 +44,7 @@
       docker
       hermes
       hermes-secrets-sync
+      battery-guard
       build-worker
       harmonia
       cache-warm

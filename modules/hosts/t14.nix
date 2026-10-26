@@ -53,6 +53,7 @@
 
       ssh-server
       hermes-access
+      battery-guard-target
     ]);
 
     boot.kernelParams = [
