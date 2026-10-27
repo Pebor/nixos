@@ -5,13 +5,11 @@
   # `nixos-install` from the ISO). Mirror of modules/base/nix.nix — keep in sync.
   nixConfig = {
     extra-substituters = [
-      "https://cache.garnix.io"
       "https://nix-logseq-git-flake.cachix.org"
       "https://noctalia.cachix.org"
       "https://helix.cachix.org"
     ];
     extra-trusted-public-keys = [
-      "cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
       "nix-logseq-git-flake.cachix.org-1:DSBNW07PSRyCvS926tpIWahb53OIydwwZhsP6LhJNZo="
       "noctalia.cachix.org-1:pCOR47nnMEo5thcxNDtzWpOxNFQsBRglJzxWPp3dkU4="
       "helix.cachix.org-1:ejp9KQpR1FBI2onstMQ34yogDm4OgU2ru6lIwPvuCVs="
