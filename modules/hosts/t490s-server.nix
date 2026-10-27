@@ -67,7 +67,7 @@
     # ~1 900 lines/day). Logs are for recent debugging, so bound both size
     # and age - a noisy source now evicts old entries instead of the disk.
     services.journald.settings.Journal = {
-      SystemMaxUse = "500M";
+      SystemMaxUse = "1G";
       MaxRetentionSec = "30d";
     };
 
