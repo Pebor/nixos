@@ -62,6 +62,29 @@
     services.resolved.enable = true;
     services.fwupd.enable = true;
 
+    # --- Wired uplink (dorm ethernet socket) ---------------------------
+    # SIN registers ONE ethernet MAC per student (4 WiFi + 1 eth), so the
+    # cable stays in this machine and the PC will get its network through
+    # it (kanban #28). The saved Sincoolka profile already carries
+    # route-metric 100, which TIES with NetworkManager's auto-generated
+    # wired profile - which link wins the default route would be luck.
+    # Pin the wired profile below WiFi and give it autoconnect priority, so
+    # plugging the cable always takes over and unplugging falls back to WiFi.
+    networking.networkmanager.ensureProfiles.profiles.wan-eth = {
+      connection = {
+        id = "wan-eth";
+        type = "ethernet";
+        interface-name = "enp0s31f6";
+        autoconnect = "true";
+        autoconnect-priority = "10";
+      };
+      ipv4 = {
+        method = "auto";
+        route-metric = "50";
+      };
+      ipv6 = { method = "auto"; };
+    };
+
     # journald had no cap at all: the journal held 8 months / 2.1 M lines /
     # 1.4 GB and grew forever (a 30 s docker healthcheck alone contributes
     # ~1 900 lines/day). Logs are for recent debugging, so bound both size
