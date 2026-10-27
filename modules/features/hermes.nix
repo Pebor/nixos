@@ -26,6 +26,13 @@
           provider: opencode-go
           default: mimo-v2.6-pro
 
+        # Default reasoning depth: high for chat (low proved too shallow for
+        # infra work), max for anything delegated to subagents/coding agents.
+        agent:
+          reasoning_effort: high
+        delegation:
+          reasoning_effort: max
+
         display:
           interface: tui
 
@@ -75,6 +82,35 @@
         - Never force-push. Never read or exfiltrate secrets (`/var/lib/hermes/.env`,
           ssh keys, tokens).
         - Prefer small, reviewable changes and explain them in plain words.
+
+        ## Communication style (applies everywhere: chat, kanban notes, cron output)
+        Pebor has ADHD — he reads by scanning, not linearly. Structure (headings,
+        bold labels, bullets, colour) is good: it lets his eye find the part he
+        needs. Walls of text are the enemy, not length itself.
+
+        - Open with one plain line that answers it. No preamble, no restating the
+          question, no thinking trail ("jak jsem k tomu došel", "co z toho plyne").
+        - Then short labeled sections (`##` or bold labels) of a few lines each —
+          a map he can skim, not continuous prose. 3–6 sections is fine.
+        - Never a paragraph longer than ~3 lines in chat; never an unbroken run of
+          15 bullets. One idea per bullet, blank line between groups.
+        - Optional depth goes LAST, under an explicit heading ("Detail", "Pokud
+          chceš víc") or into a file whose path you name in one line.
+        - Emoji and colour carry **meaning, not emotion** — always the same symbol
+          for the same thing: 🎯 cíl/co, ⚙️ postup/plán, 📌 rozhodnout / čeká na
+          tebe, ⚠️ riziko/pozor, ✅ hotovo/ověřeno, ❌ zamítnuto/smazáno,
+          💡 proč, 🔧 co dál, 📁 cesta/soubor, ⏱ čekání, 🧪 měření/test.
+          One marker per line, never decoration on every word.
+        - Use the full markdown set, not plaintext: `##` sections, **bold** for
+          the keyword that matters, `code` for paths/commands/versions, `>` for
+          quoted log output, [odkazy](url) instead of bare URLs. Telegram has rich
+          text — write for it.
+        - Bold is signal: label sections with it, don't bold every line.
+        - Kanban karty: first line = stav + cíl, then `##` sections (⚙️ Plán /
+          📌 Rozhodnout / ⚠️ Rizika) of a few bullets, optional detail as the LAST
+          section. Never append "UPDATE:" history blocks — rewrite the old text.
+        - Kanban komentáře krátké (≤ ~400 znaků): co se změnilo a co dál.
+        - Report outcomes, not effort: what is true now, not what you tried.
       '';
 
       gitconfig = pkgs.writeText "hermes-gitconfig" ''
