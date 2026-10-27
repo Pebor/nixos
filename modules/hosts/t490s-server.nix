@@ -62,6 +62,15 @@
     services.resolved.enable = true;
     services.fwupd.enable = true;
 
+    # journald had no cap at all: the journal held 8 months / 2.1 M lines /
+    # 1.4 GB and grew forever (a 30 s docker healthcheck alone contributes
+    # ~1 900 lines/day). Logs are for recent debugging, so bound both size
+    # and age - a noisy source now evicts old entries instead of the disk.
+    services.journald.settings.Journal = {
+      SystemMaxUse = "500M";
+      MaxRetentionSec = "30d";
+    };
+
     # Battery health: the pack sat at 100% permanently, which is what kills
     # Li-poly cells. ThinkPad tpacpi exposes charge thresholds via BAT0, so
     # hold it at 80% and only start charging again below 75%. udev (not a
