@@ -49,6 +49,7 @@
       harmonia
       cache-warm
       valheim-chat-watcher
+      valheim-llyfr-notify
     ]);
 
     networking.hostName = "t490s";
