@@ -24,10 +24,11 @@
     };
 
     # The socket can only bind once tailscale0 carries its address, so tie it
-    # to tailscaled and let systemd retry the bind if it loses that race.
+    # to the readiness gate (tailscaled.service alone starts too early) and let
+    # systemd retry the bind if it loses that race anyway.
     systemd.sockets.harmonia = {
-      after = [ "tailscaled.service" ];
-      wants = [ "tailscaled.service" ];
+      after = [ "tailscale-wait-address.service" ];
+      wants = [ "tailscale-wait-address.service" ];
       socketConfig.Restart = "on-failure";
       socketConfig.RestartSec = 5;
     };

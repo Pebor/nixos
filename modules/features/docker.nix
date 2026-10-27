@@ -26,6 +26,14 @@
     # docker.service, which restarts every container including the agent.
     systemd.services.docker.serviceConfig.TimeoutStopSec = "180s";
 
+    # Compose stacks publish on the tailnet address (edge-dnsmasq on
+    # 100.103.136.50:53). Dockerd starting before tailscale0 has its address
+    # makes those binds fail, and `restart: unless-stopped` then leaves the
+    # container running with no network instead of retrying. Order the daemon
+    # (and therefore its containers) behind the readiness gate.
+    systemd.services.docker.after = [ "tailscale-wait-address.service" ];
+    systemd.services.docker.wants = [ "tailscale-wait-address.service" ];
+
     environment.systemPackages = with pkgs; [
       docker-compose
       lazydocker
