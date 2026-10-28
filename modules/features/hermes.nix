@@ -36,6 +36,14 @@
         display:
           interface: tui
 
+        # Curated memory is injected into EVERY turn, so the caps are a real
+        # token cost — 4400/2750 chars ≈ 2600 tokens, double the default
+        # (2200/1375) because the infra map outgrew the old budget and kept
+        # hitting the cap. Keep entries terse; the budget is room, not a target.
+        memory:
+          memory_char_limit: 4400
+          user_char_limit: 2750
+
         approvals:
           mode: smart
           smart_policy: |
