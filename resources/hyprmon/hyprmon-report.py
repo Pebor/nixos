@@ -991,6 +991,7 @@ def run_build(args):
         "per_hour": per_hour,                 # hour-of-day totals across the window
         "by_category_app_hour": cat_rows,
         "top_apps": top_apps,                 # sorted by minutes; report shows top 10
+        "top_apps_grouped": group_top_apps(app_tot, total_active),  # one row per app
         "media_minutes": {
             "total": r2(media_total),
             "per_player": {p: r2(m) for p, m in sorted(media_per_player.items())},
@@ -1548,6 +1549,30 @@ function hmCat(mode){
 try { if (localStorage.getItem('hyprmon.catview') === 'bar') hmCat('bar'); } catch (e) {}
 </script>
 """
+
+
+def group_top_apps(app_tot, total_active: float, limit: int = 12):
+    """Collapse (category, app) totals into one row per app.
+
+    The same binary shows up in several categories (zen-beta browsing vs
+    zen-beta youtube), and a top-app list with the same name three times explains
+    nothing. Each row carries its per-category split so the tooltip can say where
+    the time went.
+    """
+    grouped: dict[str, dict[str, float]] = collections.defaultdict(lambda: collections.defaultdict(float))
+    for (category, app), minutes in app_tot.items():
+        grouped[app][category] += minutes
+    rows = []
+    for app, cats in grouped.items():
+        total = sum(cats.values())
+        rows.append({
+            "app": app,
+            "minutes": r2(total),
+            "percent": pct(total, total_active),
+            "categories": {c: r2(m) for c, m in sorted(cats.items(), key=lambda kv: -kv[1])},
+        })
+    rows.sort(key=lambda r: (-r["minutes"], r["app"]))
+    return rows[:limit]
 
 
 def render_html(aggr, timeline, day_bounds, tz, wifi_labels, cat_spec):

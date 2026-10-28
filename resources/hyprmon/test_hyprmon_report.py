@@ -123,6 +123,16 @@ class FormattingTests(unittest.TestCase):
         self.assertEqual(svg.count("<circle"), 2)
 
 
+class TopAppsTests(unittest.TestCase):
+    def test_same_app_is_one_row_with_category_split(self) -> None:
+        app_tot = {("browsing", "zen-beta"): 140.0, ("youtube", "zen-beta"): 60.0,
+                   ("messaging", "org.telegram.desktop"): 95.0}
+        rows = r.group_top_apps(app_tot, 295.0)
+        self.assertEqual([row["app"] for row in rows], ["zen-beta", "org.telegram.desktop"])
+        self.assertEqual(rows[0]["minutes"], 200.0)
+        self.assertEqual(rows[0]["categories"], {"browsing": 140.0, "youtube": 60.0})
+
+
 class DashboardTests(unittest.TestCase):
     def test_write_dashboard_embeds_aggregates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

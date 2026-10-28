@@ -40,12 +40,14 @@
       .sort((a, b) => b.minutes - a.minutes)
   );
 
+  // One colour per metric, the same hue it has in the charts — otherwise the
+  // cards read as arbitrary boxes with only two of them tinted.
   const kpis = $derived([
-    { label: 'Aktivita', value: hm(totals.active_minutes), tone: 'cyan' },
-    { label: 'Media', value: hm(totals.media_minutes), tone: 'rose' },
-    { label: 'AFK', value: hm(totals.afk_minutes), tone: 'muted' },
-    { label: 'Zamčeno', value: hm(totals.locked_minutes), tone: 'muted' },
-    { label: 'Idle span', value: hm(totals.idle_span_minutes), tone: 'muted' }
+    { label: 'Aktivita', value: hm(totals.active_minutes), tone: '#4e79a7' },
+    { label: 'Media', value: hm(totals.media_minutes), tone: '#ef6b6b' },
+    { label: 'AFK', value: hm(totals.afk_minutes), tone: '#f5a04a' },
+    { label: 'Zamčeno', value: hm(totals.locked_minutes), tone: '#bd8fb7' },
+    { label: 'Idle span', value: hm(totals.idle_span_minutes), tone: '#7f8fa3' }
   ]);
 
   const donutConfig = $derived({
@@ -137,13 +139,21 @@
     }
   });
 
+  // group_top_apps in the report collapses (category, app) rows: zen-beta used to
+  // appear three times with no hint what the difference was.
+  const appRows = $derived((data.top_apps_grouped ?? data.top_apps ?? []).slice(0, 10));
+
   const appsConfig = $derived.by(() => {
-    const rows = (data.top_apps ?? []).slice(0, 10);
+    const rows = appRows;
     return {
       type: 'bar',
       data: {
         labels: rows.map((r) => r.app),
-        datasets: [{ data: rows.map((r) => r.minutes), backgroundColor: rows.map((r) => colors[r.category] || '#888'), borderRadius: 3 }]
+        datasets: [{
+          data: rows.map((r) => r.minutes),
+          backgroundColor: rows.map((r) => colors[Object.keys(r.categories || {})[0] || r.category] || '#888'),
+          borderRadius: 3
+        }]
       },
       options: {
         indexAxis: 'y',
@@ -153,7 +163,20 @@
           x: { ticks: { callback: (v) => hm(v) } },
           y: { grid: { display: false } }
         },
-        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => ` ${hm(c.parsed.x)}` } } }
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (c) => {
+                const row = rows[c.dataIndex] || {};
+                const split = Object.entries(row.categories || {})
+                  .map(([cat, m]) => `${cat} ${hm(m)}`)
+                  .join(' · ');
+                return ` ${hm(c.parsed.x)}${split ? ` — ${split}` : ''}`;
+              }
+            }
+          }
+        }
       }
     };
   });
@@ -219,7 +242,7 @@
 
     <section class="kpis">
       {#each kpis as k}
-        <div class="kpi {k.tone}">
+        <div class="kpi" style="--tone:{k.tone}">
           <span class="kpi-label">{k.label}</span>
           <strong>{k.value}</strong>
         </div>
@@ -322,16 +345,18 @@
         </article>
       {/if}
 
-      {#if data.channels?.length}
-        <article class="card">
-          <div class="card-head"><h2>YouTube kanály</h2></div>
+      <article class="card">
+        <div class="card-head"><h2>YouTube kanály</h2></div>
+        {#if data.channels?.length}
           <ul class="rows">
             {#each data.channels.slice(0, 8) as ch}
               <li><span class="name">{ch.channel}</span><b>{hm(ch.playing_minutes)}</b><span class="pct">tab {hm(ch.tab_minutes)}</span></li>
             {/each}
           </ul>
-        </article>
-      {/if}
+        {:else}
+          <p class="empty">zatím žádná data — kanály přijdou z browser extensionu (potřebuje restart Zenu a chvíli brouzdání)</p>
+        {/if}
+      </article>
 
       {#if data.hosts?.length}
         <article class="card">
@@ -367,13 +392,11 @@
 
   .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 16px; }
   .kpi {
-    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
-    padding: 12px 14px; display: flex; flex-direction: column; gap: 2px;
+    background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--tone);
+    border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px;
   }
-  .kpi-label { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  .kpi-label { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--tone); opacity: .9; }
   .kpi strong { font-size: 21px; font-weight: 650; color: var(--head); }
-  .kpi.cyan { border-color: rgba(34, 211, 238, .35); }
-  .kpi.rose { border-color: rgba(251, 113, 133, .35); }
 
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; }
   .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px 16px; }
@@ -402,12 +425,12 @@
   .rows b { font-variant-numeric: tabular-nums; }
   .rows .pct { color: var(--muted); font-size: 11.5px; }
 
-  .heat { display: grid; gap: 3px; }
-  .heat-hours { display: grid; grid-template-columns: repeat(24, 1fr); gap: 3px; margin-left: 44px; color: var(--muted); font-size: 9.5px; text-align: center; }
-  .heat-row { display: grid; grid-template-columns: 40px 1fr; gap: 4px; align-items: center; }
+  .heat { --cell: clamp(11px, 1.15vw, 17px); display: grid; gap: 3px; overflow-x: auto; padding-bottom: 2px; }
+  .heat-hours { display: grid; grid-template-columns: repeat(24, var(--cell)); gap: 3px; margin-left: calc(40px + 4px); color: var(--muted); font-size: 9.5px; text-align: center; }
+  .heat-row { display: grid; grid-template-columns: 40px max-content; gap: 4px; align-items: center; }
   .heat-day { font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .heat-cells { display: grid; grid-template-columns: repeat(24, 1fr); gap: 3px; }
-  .heat-cell { display: block; height: 18px; border-radius: 3px; transition: transform .1s; }
+  .heat-cells { display: grid; grid-template-columns: repeat(24, var(--cell)); gap: 3px; }
+  .heat-cell { display: block; width: var(--cell); height: var(--cell); border-radius: 2px; transition: transform .1s; }
   .heat-cell:hover { transform: scale(1.15); outline: 1px solid var(--line-strong); }
 
   .health { margin-top: 18px; color: var(--muted); font-size: 12px; }
