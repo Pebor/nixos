@@ -101,5 +101,27 @@ class NormalizeHostOverlayTests(unittest.TestCase):
         self.assertEqual(spans[0].app, "foot/hx")
 
 
+class FormattingTests(unittest.TestCase):
+    def test_hm_is_human_readable(self) -> None:
+        self.assertEqual(r.hm(0), "0 min")
+        self.assertEqual(r.hm(45), "45 min")
+        self.assertEqual(r.hm(60), "1 h")
+        self.assertEqual(r.hm(83), "1 h 23 min")
+        self.assertEqual(r.hm(563), "9 h 23 min")
+
+    def test_wifi_display_prefers_mapped_label_then_ssid(self) -> None:
+        self.assertEqual(r.wifi_display("kolej", "Sincoolka"), "kolej")
+        self.assertEqual(r.wifi_display("other", "Sincoolka"), "Sincoolka")
+        self.assertEqual(r.wifi_display("other", None), "other")
+        self.assertEqual(r.wifi_display("none", None), "none")
+
+    def test_donut_handles_no_data(self) -> None:
+        self.assertIn("Nothing to show", r.svg_donut([]))
+
+    def test_donut_svg_has_one_arc_per_category(self) -> None:
+        svg = r.svg_donut([("a", 30, "#111"), ("b", 10, "#222")])
+        self.assertEqual(svg.count("<circle"), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

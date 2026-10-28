@@ -47,30 +47,56 @@
       # sideloaded XPI is registered but left disabled).
       home.activation.hyprmonZenExtension = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
         zenConfig="$HOME/.config/zen"
+        install_profile() {
+          prof="$1"
+          [ -d "$prof" ] || return 1
+          install -d -m 0700 "$prof/extensions"
+          install -m 0644 ${hyprmonExtension} "$prof/extensions/hyprmon@local.xpi"
+          if ! grep -qF '# >>> hyprmon extension' "$prof/user.js" 2>/dev/null; then
+            {
+              [ -f "$prof/user.js" ] && cat "$prof/user.js"
+              echo '# >>> hyprmon extension (managed by home-manager)'
+              echo 'user_pref("xpinstall.signatures.required", false);'
+              echo 'user_pref("extensions.autoDisableScopes", 0);'
+              echo '# <<< hyprmon extension'
+            } > "$prof/.user.js.new"
+            mv "$prof/.user.js.new" "$prof/user.js"
+          fi
+          echo "hyprmon: extension installed into $prof" >&2
+          return 0
+        }
+        installed=0
         if [ -f "$zenConfig/profiles.ini" ]; then
-          while IFS= read -r rel; do
+          # Read the ini line by line instead of feeding sed output through a
+          # heredoc: `IFS= read` keeps leading whitespace, and a profile named
+          # "p4q16twc.Default Profile" then looked like a missing directory, so
+          # the extension was silently never installed.
+          while IFS= read -r line; do
+            case "$line" in
+              Path=*) ;;
+              *) continue ;;
+            esac
+            rel="''${line#Path=}"
+            rel="$(printf '%s' "$rel" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
             [ -n "$rel" ] || continue
             case "$rel" in
               /*) prof="$rel" ;;
               *) prof="$zenConfig/$rel" ;;
             esac
-            [ -d "$prof" ] || continue
-            install -d -m 0700 "$prof/extensions"
-            install -m 0644 ${hyprmonExtension} "$prof/extensions/hyprmon@local.xpi"
-            if ! grep -qF '# >>> hyprmon extension' "$prof/user.js" 2>/dev/null; then
-              {
-                [ -f "$prof/user.js" ] && cat "$prof/user.js"
-                echo '# >>> hyprmon extension (managed by home-manager)'
-                echo 'user_pref("xpinstall.signatures.required", false);'
-                echo 'user_pref("extensions.autoDisableScopes", 0);'
-                echo '# <<< hyprmon extension'
-              } > "$prof/.user.js.new"
-              mv "$prof/.user.js.new" "$prof/user.js"
-            fi
-            echo "hyprmon: extension installed into $prof" >&2
-          done <<HYPRMON_PROFILES
-        $(sed -n 's/^Path=//p' "$zenConfig/profiles.ini")
-        HYPRMON_PROFILES
+            if install_profile "$prof"; then installed=$((installed + 1)); fi
+          done < "$zenConfig/profiles.ini"
+        fi
+        # Fallback: a profile that profiles.ini does not list (new "profile
+        # groups" layout) is still found by its prefs.js.
+        if [ "$installed" -eq 0 ] && [ -d "$zenConfig" ]; then
+          for prof in "$zenConfig"/*/; do
+            prof="''${prof%/}"
+            [ -f "$prof/prefs.js" ] || continue
+            if install_profile "$prof"; then installed=$((installed + 1)); fi
+          done
+        fi
+        if [ "$installed" -eq 0 ]; then
+          echo "hyprmon: no Zen profile found under $zenConfig - extension NOT installed" >&2
         fi
       '';
 

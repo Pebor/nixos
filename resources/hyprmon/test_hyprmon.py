@@ -283,6 +283,24 @@ class RecorderPrivacyTests(unittest.TestCase):
         rec.record_wifi("HomeNet")
         self.assertEqual(self.store.records[0]["ssid"], "HomeNet")
 
+    def test_suspend_closes_open_media_run_at_the_sleep_boundary(self) -> None:
+        rec = self._recorder()
+        rec.record_media([h.MediaSnapshot("firefox", "Playing", "Video", None)])
+        self.clock.advance(120)
+        sleep_start = self.clock() - 60
+        self.assertEqual(rec.close_media_at(sleep_start), 1)
+        closed = self.store.records[-1]
+        self.assertEqual(closed["status"], "closed")
+        self.assertEqual(closed["ts"], sleep_start)
+        # The tracked state is gone, so a still-playing player opens a NEW run.
+        rec.record_media([h.MediaSnapshot("firefox", "Playing", "Video", None)])
+        self.assertEqual(self.store.records[-1]["status"], "Playing")
+
+    def test_close_media_at_without_players_is_a_noop(self) -> None:
+        rec = self._recorder()
+        self.assertEqual(rec.close_media_at(1000.0), 0)
+        self.assertEqual(self.store.records, [])
+
     def test_snapshot_reports_no_titles(self) -> None:
         rec = self._recorder()
         rec.handle_hypr_event("activewindow", "kitty,secret title")
@@ -647,6 +665,46 @@ class UrlServerTests(unittest.TestCase):
             conn.close()
         finally:
             server.stop()
+
+
+class MediaStallTests(unittest.TestCase):
+    """A "Playing" sample whose Position never moves is not playback."""
+
+    def setUp(self) -> None:
+        self.clock = FakeClock()
+        daemon = object.__new__(h.Daemon)
+        daemon._media_progress = {}
+        daemon._counters = h.Counter()
+        daemon._clock = self.clock
+        self.daemon = daemon
+
+    def _snapshot(self, position):
+        return h.MediaSnapshot("firefox", "Playing", "Video", None, position=position)
+
+    def test_frozen_position_is_demoted_to_paused(self) -> None:
+        self.assertEqual(self.daemon._demote_stalled([self._snapshot(42.0)])[0].status, "Playing")
+        self.clock.advance(h.MEDIA_STALL_S + 1)
+        demoted = self.daemon._demote_stalled([self._snapshot(42.0)])[0]
+        self.assertEqual(demoted.status, "paused")
+        self.assertEqual(self.daemon._counters["media_stalled"], 1)
+
+    def test_advancing_position_stays_playing(self) -> None:
+        self.daemon._demote_stalled([self._snapshot(42.0)])
+        self.clock.advance(h.MEDIA_STALL_S + 1)
+        advanced = self.daemon._demote_stalled([self._snapshot(43.0)])[0]
+        self.assertEqual(advanced.status, "Playing")
+
+    def test_player_without_position_is_left_alone(self) -> None:
+        snap = h.MediaSnapshot("radio", "Playing", "Stream", None)
+        self.daemon._demote_stalled([snap])
+        self.clock.advance(h.MEDIA_STALL_S * 3)
+        self.assertEqual(self.daemon._demote_stalled([snap])[0].status, "Playing")
+
+    def test_stream_at_zero_is_left_alone(self) -> None:
+        snap = self._snapshot(0.0)
+        self.daemon._demote_stalled([snap])
+        self.clock.advance(h.MEDIA_STALL_S * 3)
+        self.assertEqual(self.daemon._demote_stalled([snap])[0].status, "Playing")
 
 
 if __name__ == "__main__":

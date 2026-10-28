@@ -2,7 +2,8 @@
 """hyprmon-report: turn hyprmon event stores into aggregates.json + report.html.
 
 Python 3.11+ standard library only. The HTML report is fully self-contained
-(inline CSS and hand-rolled inline SVG, no scripts, no external resources).
+(inline CSS, hand-rolled inline SVG and one small inline script for the chart
+toggles; no external resources).
 
 Usage examples:
     hyprmon-report.py --day 2026-10-21
@@ -71,6 +72,7 @@ CAT_COLORS = {
 }
 EXTRA_COLORS = ["#edc948", "#ff9da7", "#86bcb6", "#d37295", "#4e79a7", "#59a14f", "#e15759"]
 WIFI_COLORS = ["#8dd3c7", "#ffffb3", "#bebada", "#fb8072", "#80b1d3", "#fdb462", "#b3de69", "#fccde5"]
+SERVICE_COLORS = ["#fb8072", "#80b1d3", "#fdb462", "#b3de69", "#fccde5", "#bebada", "#8dd3c7", "#ffffb3"]
 MEDIA_COLOR = "#e15759"
 PLAYBACK_COLOR = "#f28e2b"
 ACTIVE_COLOR = "#4e79a7"
@@ -488,6 +490,49 @@ def url_index_at(points, t):
     return i if i >= 0 else -1
 
 
+def wifi_display(label: str, ssid: str | None) -> str:
+    """What the report calls a Wi-Fi network.
+
+    A label mapped in [wifi_labels] wins (that is the deliberate grouping); a
+    network the config does not know is shown as its own SSID instead of the
+    bare "other", which is what makes the bands readable. "none" (not connected)
+    stays as it is.
+    """
+    if label not in ("other", "none"):
+        return label
+    if ssid:
+        return ssid
+    return label
+
+
+def awake_intervals(timestamps, max_gap_s: float = 600.0):
+    """Intervals with no silent gap longer than ``max_gap_s``.
+
+    The collector writes at least one record per poll interval while it runs, so
+    a longer silence means the laptop was suspended. A Wi-Fi label holds until the
+    next change, and without this clip a whole night would be credited to the last
+    network (usually "none").
+    """
+    out = []
+    start = prev = None
+    for ts in sorted(timestamps):
+        if prev is None:
+            start = prev = ts
+            continue
+        if ts - prev > max_gap_s:
+            if prev > start:
+                out.append((start, prev))
+            start = ts
+        prev = ts
+    if start is not None and prev > start:
+        out.append((start, prev))
+    return out
+
+
+def intersect_intervals(a: float, b: float, intervals):
+    return [(max(a, x), min(b, y)) for x, y in intervals if min(b, y) > max(a, x)]
+
+
 def normalize(events, compiled, health):
     raw_spans, ctrl, media, wifi, wstates, url_points = [], [], [], [], [], []
     data_ts = []
@@ -552,7 +597,8 @@ def normalize(events, compiled, health):
             if ts is None:
                 health["invalid_events"] += 1
                 continue
-            wifi.append((ts, str(ev.get("label") or "(none)")))
+            ssid = ev.get("ssid")
+            wifi.append((ts, str(ev.get("label") or "(none)"), str(ssid) if ssid else None))
             data_ts.append(ts)
         elif typ == "window_state":
             health["window_state_events"] += 1
@@ -607,7 +653,10 @@ def normalize(events, compiled, health):
             health["spans_with_proc"] += 1
         if s["path"]:
             health["spans_with_path"] += 1
-    return spans, sorted(ctrl), media, sorted(wifi), sorted(wstates), url_points, data_end
+    # Media records can arrive slightly out of order: the collector writes a
+    # "closed" record stamped at the sleep boundary when the laptop resumes from
+    # suspend. Sorting keeps the per-player run math monotonic in time.
+    return spans, sorted(ctrl), sorted(media), sorted(wifi), sorted(wstates), url_points, data_end
 
 
 def run_build(args):
@@ -653,6 +702,7 @@ def run_build(args):
     health["window_days_without_event_file"] = [i for d, i in zip(days, isos) if d not in file_days]
 
     events = read_events(files, health)
+    awake = awake_intervals([float(ev["ts"]) for ev in events if isinstance(ev.get("ts"), (int, float))])
     spans, ctrl, media, wifi, wstates, url_points, data_end = normalize(events, compiled, health)
     media_services, media_service_source = load_media_services(cfg_path, args.config_explicit)
 
@@ -840,16 +890,18 @@ def run_build(args):
 
     # ---- wifi bands (label holds from its event until the next wifi event)
     wifi_segs = []
-    for i, (t, label) in enumerate(wifi):
+    for i, (t, label, ssid) in enumerate(wifi):
         end = wifi[i + 1][0] if i + 1 < len(wifi) else data_end
         if end > t:
-            wifi_segs.append((t, end, label))
+            wifi_segs.append((t, end, wifi_display(label, ssid)))
     labels = sorted({lab for _, _, lab in wifi_segs})
     wifi_minutes = collections.defaultdict(float)
     for a, b, label in wifi_segs:
-        for iso, p0, p1 in didx.split(a, b):
-            wifi_minutes[label] += (p1 - p0) / 60.0
-            timeline[iso]["wifi"].append((p0, p1, "wifi", label))
+        # Clip to awake time: the label survives a suspend, the session does not.
+        for s0, s1 in intersect_intervals(a, b, awake):
+            for iso, p0, p1 in didx.split(s0, s1):
+                wifi_minutes[label] += (p1 - p0) / 60.0
+                timeline[iso]["wifi"].append((p0, p1, "wifi", label))
 
     # ---- health finishing
     active_total = sum(tot[i]["active_minutes"] for i in isos)
@@ -868,7 +920,7 @@ def run_build(args):
     for ts, _ in ctrl:
         if lo <= ts < hi:
             event_days.add(local_date_iso(ts, tz))
-    for ts, _ in wifi:
+    for ts, *_rest_wifi in wifi:
         if lo <= ts < hi:
             event_days.add(local_date_iso(ts, tz))
     health["days_with_any_event"] = len([i for i in isos if i in event_days])
@@ -963,8 +1015,21 @@ def esc(x) -> str:
 
 
 def hm(minutes: float) -> str:
+    """Human duration: "9 h 23 min", "45 min", "2 h" — never a bare minute count."""
     total = int(round(minutes))
-    return f"{total // 60}h {total % 60:02d}m"
+    if total <= 0:
+        return "0 min"
+    if total < 60:
+        return f"{total} min"
+    hours, mins = divmod(total, 60)
+    return f"{hours} h {mins:02d} min" if mins else f"{hours} h"
+
+
+def service_rows(aggr):
+    """(service, minutes, colour) rows for the media-by-service donut."""
+    per = aggr["media_minutes"]["per_service"]
+    items = sorted(per.items(), key=lambda kv: -kv[1])
+    return [(name, minutes, SERVICE_COLORS[k % len(SERVICE_COLORS)]) for k, (name, minutes) in enumerate(items)]
 
 
 def color_map(order, labels_wifi):
@@ -1011,6 +1076,63 @@ def heat_color(t):
     t = max(0.0, min(1.0, t))
     a, b = (240, 244, 255), (31, 78, 156)
     return "#{:02x}{:02x}{:02x}".format(*(round(a[k] + (b[k] - a[k]) * t) for k in range(3)))
+
+
+def legend_pct_html(order, colors, minutes):
+    total = sum(minutes.get(c, 0.0) for c in order) or 1.0
+    parts = [
+        f'<span><i class="sw" style="background:{colors.get(c, "#888")}"></i>{esc(c)} '
+        f'<b>{esc(hm(minutes.get(c, 0.0)))}</b> · {minutes.get(c, 0.0) / total * 100:.0f}%</span>'
+        for c in order if minutes.get(c, 0.0) > 0
+    ]
+    return '<div class="legend">' + "".join(parts) + "</div>"
+
+
+def svg_donut(rows, title="share", size=250):
+    """Donut of (label, minutes, colour) rows, drawn with stroke-dasharray arcs."""
+    rows = [(lab, m, col) for lab, m, col in rows if m > 0]
+    total = sum(m for _, m, _ in rows)
+    if total <= 0:
+        return '<p class="note">Nothing to show.</p>'
+    r, sw = 70.0, 34.0
+    circ = 2 * math.pi * r
+    out = [f'<svg width="{size}" height="{size}" viewBox="0 0 200 200" role="img" aria-label="{esc(title)}">']
+    offset = 0.0
+    for lab, m, col in rows:
+        dash = m / total * circ
+        out.append(
+            f'<circle cx="100" cy="100" r="{r:g}" fill="none" stroke="{col}" stroke-width="{sw:g}" '
+            f'stroke-dasharray="{dash:.2f} {circ - dash:.2f}" stroke-dashoffset="{-offset:.2f}" '
+            f'transform="rotate(-90 100 100)">'
+            f'<title>{esc(lab)}: {esc(hm(m))} ({m / total * 100:.1f}%)</title></circle>')
+        offset += dash
+    out.append(f'<text x="100" y="97" text-anchor="middle" style="font-size:12px;font-weight:600">{esc(hm(total))}</text>')
+    out.append('<text x="100" y="113" text-anchor="middle" style="font-size:10px;fill:#666">total</text>')
+    out.append("</svg>")
+    return "".join(out)
+
+
+def svg_top_apps(aggr, colors, n=10):
+    """Horizontal bars of the top n apps — the same data as the table, glanceable."""
+    rows = (aggr.get("top_apps") or [])[:n]
+    if not rows:
+        return ""
+    label_w, bar_w, row_h = 190, 470, 22
+    width = label_w + bar_w + 120
+    height = len(rows) * row_h + 6
+    scale = max(r["minutes"] for r in rows) or 1.0
+    out = [f'<svg width="{width}" height="{height}" role="img" aria-label="Top apps by active time">']
+    for k, r in enumerate(rows):
+        y = 3 + k * row_h
+        w = max(r["minutes"] / scale * bar_w, 0.5)
+        col = colors.get(r["category"], "#888888")
+        label = r["app"] if len(r["app"]) <= 26 else r["app"][:25] + "…"
+        out.append(f'<text x="{label_w - 8}" y="{y + 14}" text-anchor="end">{esc(label)}</text>')
+        out.append(f'<rect x="{label_w}" y="{y + 3}" width="{w:.1f}" height="{row_h - 8}" fill="{col}">'
+                   f'<title>{esc(r["app"])}: {esc(hm(r["minutes"]))} ({r["percent"]:.1f}%)</title></rect>')
+        out.append(f'<text x="{label_w + w + 6:.1f}" y="{y + 14}">{esc(hm(r["minutes"]))}</text>')
+    out.append("</svg>")
+    return "".join(out)
 
 
 def svg_heatmap(aggr):
@@ -1167,10 +1289,10 @@ def top_apps_html(aggr):
     body = []
     for k, r in enumerate(rows, 1):
         body.append(f'<tr><td>{k}</td><td>{esc(r["app"])}</td><td>{esc(r["category"])}</td>'
-                    f'<td class="num">{r["minutes"]:.1f}</td><td class="num">{hm(r["minutes"])}</td>'
+                    f'<td class="num">{esc(hm(r["minutes"]))}</td>'
                     f'<td class="num">{r["percent"]:.1f}%</td></tr>')
-    return ('<table><tr><th>#</th><th>App (class)</th><th>Category</th><th>Minutes</th>'
-            '<th>Duration</th><th>% of active</th></tr>' + "".join(body) + "</table>")
+    return ('<table><tr><th>#</th><th>App (class)</th><th>Category</th>'
+            '<th class="num">Duration</th><th class="num">% of active</th></tr>' + "".join(body) + "</table>")
 
 
 def build_timeline_payload(timeline, day_bounds, colors, wifi_colors):
@@ -1346,9 +1468,9 @@ def services_html(aggr):
     if not per_service:
         return '<p class="note">No media playing recorded (or no service matched).</p>'
     rows = "".join(
-        f'<tr><th>{esc(s)}</th><td class="num">{m:.1f}</td><td class="num">{hm(m)}</td></tr>'
+        f'<tr><th>{esc(s)}</th><td class="num">{esc(hm(m))}</td></tr>'
         for s, m in sorted(per_service.items(), key=lambda kv: -kv[1]))
-    return ('<table><tr><th>Service</th><th class="num">Minutes</th><th class="num">Duration</th></tr>'
+    return ('<table><tr><th>Service</th><th class="num">Playing time</th></tr>'
             + rows + '</table>')
 
 
@@ -1360,12 +1482,11 @@ def channels_html(aggr):
     body = []
     for k, r in enumerate(rows, 1):
         body.append(f'<tr><td>{k}</td><td>{esc(r["channel"])}</td>'
-                    f'<td class="num">{r["playing_minutes"]:.1f}</td>'
-                    f'<td class="num">{hm(r["playing_minutes"])}</td>'
-                    f'<td class="num">{r["tab_minutes"]:.1f}</td>'
+                    f'<td class="num">{esc(hm(r["playing_minutes"]))}</td>'
+                    f'<td class="num">{esc(hm(r["tab_minutes"]))}</td>'
                     f'<td class="num">{r["videos"]}</td></tr>')
-    return ('<table><tr><th>#</th><th>Channel</th><th class="num">Playing min</th>'
-            '<th class="num">Playing</th><th class="num">Tab min</th><th class="num">Videos</th></tr>'
+    return ('<table><tr><th>#</th><th>Channel</th>'
+            '<th class="num">Playing</th><th class="num">Focused tab</th><th class="num">Videos</th></tr>'
             + "".join(body) + '</table>')
 
 
@@ -1375,9 +1496,8 @@ def hosts_html(aggr):
         return ('<p class="note">No browsing tab time recorded. This needs the companion browser '
                 'extension reporting the active tab.</p>')
     body = "".join(
-        f'<tr><td>{esc(h["host"])}</td><td class="num">{h["tab_minutes"]:.1f}</td>'
-        f'<td class="num">{hm(h["tab_minutes"])}</td></tr>' for h in rows)
-    return ('<table><tr><th>Site (host)</th><th class="num">Tab min</th><th class="num">Duration</th></tr>'
+        f'<tr><td>{esc(h["host"])}</td><td class="num">{esc(hm(h["tab_minutes"]))}</td></tr>' for h in rows)
+    return ('<table><tr><th>Site (host)</th><th class="num">Focused tab time</th></tr>'
             + body + '</table>')
 
 
@@ -1393,12 +1513,33 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 .note{color:#666;font-size:12px} .warn{color:#a40000;font-weight:600}
 .scroll{overflow-x:auto}
 svg text{font-family:system-ui,sans-serif;font-size:11px;fill:#333}
+.ctl{margin:8px 0 10px}
+.ctl button{font-size:12px;padding:3px 12px;margin-right:6px;border:1px solid #ccc;border-radius:4px;background:#fafafa;cursor:pointer}
+.ctl button.on{background:#e8eefc;border-color:#8aa4cc;font-weight:600}
 .tl-controls{margin:8px 0}
 .tl-controls button{font-size:12px;padding:3px 10px;margin-right:5px;border:1px solid #ccc;border-radius:4px;background:#fafafa;cursor:pointer}
 .tl-controls button:hover{background:#eef}
 .tl-wrap{position:relative;overflow-x:auto}
 .tl-tip{display:none;position:absolute;pointer-events:none;background:#222;color:#fff;font-size:12px;
 padding:4px 8px;border-radius:4px;white-space:nowrap;z-index:10;box-shadow:0 2px 6px rgba(0,0,0,.25)}
+"""
+
+
+CAT_TOGGLE_JS = """
+<script>
+function hmCat(mode){
+  var pie = document.getElementById('hm-cat-pie'), bar = document.getElementById('hm-cat-bar');
+  if (!pie || !bar) return;
+  var isPie = mode !== 'bar';
+  pie.style.display = isPie ? '' : 'none';
+  bar.style.display = isPie ? 'none' : '';
+  var pb = document.getElementById('hm-cat-pie-btn'), bb = document.getElementById('hm-cat-bar-btn');
+  if (pb) pb.className = isPie ? 'on' : '';
+  if (bb) bb.className = isPie ? '' : 'on';
+  try { localStorage.setItem('hyprmon.catview', isPie ? 'pie' : 'bar'); } catch (e) {}
+}
+try { if (localStorage.getItem('hyprmon.catview') === 'bar') hmCat('bar'); } catch (e) {}
+</script>
 """
 
 
@@ -1412,9 +1553,9 @@ def render_html(aggr, timeline, day_bounds, tz, wifi_labels, cat_spec):
                f'AFK {hm(t["afk_minutes"])} · locked {hm(t["locked_minutes"])} · '
                f'idle-flagged spans {hm(t["idle_span_minutes"])}')
     cat_list = "".join(
-        f'<tr><th>{esc(c)}</th><td>{t["category_minutes"][c]:.1f} min</td>'
+        f'<tr><th>{esc(c)}</th><td class="num">{esc(hm(t["category_minutes"][c]))}</td>'
         f'<td class="num">{t["category_percent"][c]:.1f}%</td></tr>' for c in order)
-    wifi_rows = "".join(f'<tr><th>{esc(k)}</th><td>{v:.1f} min</td></tr>'
+    wifi_rows = "".join(f'<tr><th>{esc(k)}</th><td class="num">{esc(hm(v))}</td></tr>'
                         for k, v in aggr["wifi_minutes"].items()) or '<tr><td colspan="2">no wifi events</td></tr>'
     parts = [
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">',
@@ -1425,21 +1566,33 @@ def render_html(aggr, timeline, day_bounds, tz, wifi_labels, cat_spec):
         f"<p>{esc(summary)}</p>",
         "<h2>Data health</h2>", health_html(aggr["health"], aggr),
         "<h2>Category totals</h2>",
-        f'<table>{cat_list}</table>',
-        "<h2>1. Active minutes per category per day</h2>",
-        legend_html(order, colors),
-        '<div class="scroll">', svg_stacked_bars(aggr, order, colors), "</div>",
+        '<table><tr><th>Category</th><th class="num">Duration</th><th class="num">Share</th></tr>'
+        f'{cat_list}</table>',
+        "<h2>1. Category share and daily split</h2>",
+        '<p class="note">Pie = share of active time over the whole window; daily bars = the same split '
+        'per day. The choice is remembered in this browser.</p>',
+        '<div class="ctl"><button id="hm-cat-pie-btn" class="on" onclick="hmCat(\'pie\')">Pie</button>'
+        '<button id="hm-cat-bar-btn" onclick="hmCat(\'bar\')">Daily bars</button></div>',
+        '<div id="hm-cat-pie">', legend_pct_html(order, colors, t["category_minutes"]),
+        '<div class="scroll">',
+        svg_donut([(c, t["category_minutes"][c], colors[c]) for c in order], title="Category share"),
+        "</div></div>",
+        '<div id="hm-cat-bar" style="display:none">', legend_html(order, colors),
+        '<div class="scroll">', svg_stacked_bars(aggr, order, colors), "</div></div>",
         "<h2>2. Hour-of-day heatmap (active minutes per hour)</h2>",
         '<p class="note">Cell intensity = active minutes in that local hour (full colour at 60 min).</p>',
         '<div class="scroll">', svg_heatmap(aggr), "</div>",
-        "<h2>3. Top 10 apps</h2>", top_apps_html(aggr),
+        "<h2>3. Top 10 apps</h2>",
+        '<div class="scroll">', svg_top_apps(aggr, colors), "</div>", top_apps_html(aggr),
         "<h2>4. Media playing vs active time per day</h2>",
         '<p class="note">Media time = union of Playing intervals across players. A Playing run ends at the '
         f'player\'s next event; without one it is capped at {w["media_max_gap_minutes"]:g} min.</p>',
         '<div class="scroll">', svg_media_vs_active(aggr), "</div>",
         "<h2>5. Media by service</h2>",
         '<p class="note">Playing minutes grouped by service (YouTube, Spotify, …), so different kinds of '
-        'media are counted apart.</p>', services_html(aggr),
+        'media are counted apart.</p>',
+        '<div class="scroll">', svg_donut(service_rows(aggr), title="Media by service", size=230), "</div>",
+        services_html(aggr),
         "<h2>6. YouTube channels</h2>",
         '<p class="note">Playing time per channel, joined from MPRIS playback and the active tab\'s '
         'channel. "Playing" is actual playback; "Tab" is focused-tab time.</p>', channels_html(aggr),
@@ -1460,7 +1613,7 @@ def render_html(aggr, timeline, day_bounds, tz, wifi_labels, cat_spec):
     for name in order:
         pats = cat_spec.get(name, [])
         parts.append(f'<tr><th>{esc(name)}</th><td><code>{esc(" | ".join(pats) or "(fallback)")}</code></td></tr>')
-    parts.append("</table></body></html>")
+    parts.append("</table>" + CAT_TOGGLE_JS + "</body></html>")
     return "".join(parts)
 
 

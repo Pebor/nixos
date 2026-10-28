@@ -17,7 +17,7 @@ battery_path = "/sys/class/power_supply/BAT0"
 # Persist the raw SSID alongside the label. Off by default: only the label is
 # stored. Raw SSIDs are location data (see the research report) — keep off
 # unless you have a reason.
-store_raw_ssid = false
+store_raw_ssid = true
 
 # Media titles that browsers show instead of the real title for private-window
 # media. When one of these is seen, only the playback status is stored.
@@ -82,11 +82,16 @@ terminal = ["foot", "kitty", "alacritty", "wezterm", "ghostty",
             "\\bbash\\b", "\\bfish\\b", "\\bzsh\\b", "\\bgit\\b", "\\bdocker\\b",
             "\\bpython", "\\bmake\\b", "\\bcargo\\b", "\\bnode\\b"]
 
-# Map Wi-Fi SSIDs to labels. Unmapped SSIDs are stored as "other".
+# Map Wi-Fi SSIDs to labels. Unmapped SSIDs get the label "other" in storage;
+# the report then shows the raw SSID when store_raw_ssid is on.
 # Add your networks here, e.g.:
 #   "MyHomeWiFi" = "home"
 #   "eduroam"    = "school"
 [wifi_labels]
+# Friendly names: SSID -> label used in reports. An SSID with no entry here is
+# shown as its own name (store_raw_ssid = true above), so the report says
+# "Sincoolka" instead of "other". Map a name only when you want grouping, e.g.
+#   "Sincoolka" = "kolej"
 
 # Censor rules, evaluated when a focus span closes (and for browser tab reports),
 # before anything is written. A rule matches when every matcher it sets matches

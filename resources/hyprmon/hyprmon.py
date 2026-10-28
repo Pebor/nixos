@@ -81,6 +81,15 @@ RECV_BYTES = 65536
 MAX_PARTIAL_LINE = 1 << 20
 COMMAND_TIMEOUT_S = 10.0
 MAX_SLEEP_S = 60.0
+# Wall-clock drift between two loop iterations above this means the process was
+# frozen (suspend/S3): CLOCK_MONOTONIC stops during suspend, the wall clock does
+# not. Used to close media runs at the sleep boundary instead of crediting them.
+SUSPEND_DRIFT_S = 90.0
+# A player can keep reporting Playing with a frozen Position (a paused video in a
+# background tab, a dead media session). After this long with the same position
+# the sample is demoted to "paused", so a phantom run ends instead of being
+# credited until the next state change.
+MEDIA_STALL_S = 150.0
 
 LOCK_POLL_S = 30.0
 MEDIA_POLL_S = 60.0
@@ -787,6 +796,8 @@ class MediaSnapshot:
     status: str
     title: str | None
     url: str | None
+    # Playback position in seconds (None when the player does not expose it).
+    position: float | None = None
 
 
 def _url_host(url: str | None) -> str | None:
@@ -1144,6 +1155,22 @@ class Recorder:
             self._store.append({"ts": now, "type": "media", "player": gone, "status": "closed"})
             self.stats["media_records"] += 1
 
+    def close_media_at(self, at: float) -> int:
+        """End every open media run at ``at`` and forget the tracked state.
+
+        Called when the process comes back from a suspend: the player never sent
+        Paused, so without this the last Playing would be credited until the
+        next event (or capped), which shows up as "media playing" across a
+        closed lid. Returns the number of runs closed.
+        """
+        players = sorted(self._media_state)
+        for player in players:
+            self._store.append({"ts": at, "type": "media", "player": player, "status": "closed"})
+        self._media_state.clear()
+        if players:
+            self.stats["media_records"] += len(players)
+        return len(players)
+
     # -- browser tab URLs ----------------------------------------------------
 
     def record_url(self, payload: Mapping[str, Any]) -> None:
@@ -1353,6 +1380,12 @@ def read_media() -> list[MediaSnapshot]:
             metadata = parse_string_map(_get_property(bus_name, "Metadata"))
         except (SensorUnavailable, ValueError):
             continue  # the player exited between list and get-property
+        # Position is optional: a player without it just reports None.
+        try:
+            raw_position = parse_variant(_get_property(bus_name, "Position"))
+            position = float(raw_position) / 1_000_000.0 if isinstance(raw_position, (int, float)) else None
+        except (SensorUnavailable, ValueError, UnsupportedVariant):
+            position = None
         title = metadata.get("xesam:title")
         url = metadata.get("xesam:url")
         snapshots.append(
@@ -1361,6 +1394,7 @@ def read_media() -> list[MediaSnapshot]:
                 status=status,
                 title=title if isinstance(title, str) else None,
                 url=url if isinstance(url, str) else None,
+                position=position,
             )
         )
     return snapshots
@@ -1879,6 +1913,7 @@ class Daemon:
         self._wake_r = -1
         self._wake_w = -1
         self._last_wifi_poll = float("-inf")
+        self._media_progress: dict[str, tuple[float, float]] = {}
         self._warned: set[str] = set()
         self._counters: Counter[str] = Counter()
         self._current_day = date.today()
@@ -1963,7 +1998,16 @@ class Daemon:
 
     def _loop(self) -> None:
         assert self._control is not None
+        last_wall, last_mono = time.time(), time.monotonic()
         while not self._stop:
+            wall, mono = time.time(), time.monotonic()
+            # CLOCK_MONOTONIC stops while the machine is suspended, the wall clock
+            # does not: a large difference means we just came back from sleep.
+            frozen = (wall - last_wall) - (mono - last_mono)
+            if frozen > SUSPEND_DRIFT_S:
+                resumed_at = last_wall + (mono - last_mono)
+                self._guard("resume", lambda at=resumed_at: self._on_resume(at))
+            last_wall, last_mono = wall, mono
             if self._events.connect_if_due():
                 self._guard("seed", self._seed_from_hyprctl)
             watched = [self._wake_r, self._control.fileno()]
@@ -1981,6 +2025,21 @@ class Daemon:
             if self._status_dirty:
                 self._guard("status", self._write_status)
         LOG.info("stop requested")
+
+    def _on_resume(self, frozen_at: float) -> None:
+        """Back from suspend: end open media runs at the sleep boundary.
+
+        The player never sent Paused, so without this the last Playing would be
+        credited until its next event (or the report's gap cap), which reads as
+        "media playing for hours" over a closed lid. A fresh sample right after
+        the boundary reopens a run only when something really is playing.
+        """
+        closed = self._recorder.close_media_at(frozen_at)
+        self._counters["suspend_resumes"] += 1
+        if closed:
+            LOG.info("resumed from suspend: closed %d media run(s)", closed)
+        self._guard("media", self._poll_media)
+        self._status_dirty = True
 
     def _sleep_seconds(self) -> float:
         deadlines = [task.due for task in self._tasks]
@@ -2141,7 +2200,39 @@ class Daemon:
     def _poll_media(self) -> None:
         if self._recorder.locked:
             return  # nothing from the session is recorded while locked
-        self._recorder.record_media(read_media())
+        self._recorder.record_media(self._demote_stalled(read_media()))
+
+    def _demote_stalled(self, players: Sequence[MediaSnapshot]) -> list[MediaSnapshot]:
+        """Demote a "Playing" sample whose Position has not moved for a while.
+
+        Firefox keeps the MPRIS state at Playing for a paused video or a dead
+        media session, and a poll then credits music that is not playing. The
+        position is the only signal that separates real playback from a stuck
+        state; players that do not expose it (or streams sitting at 0) are left
+        alone.
+        """
+        now = self._clock()
+        seen: set[str] = set()
+        out: list[MediaSnapshot] = []
+        for snapshot in players:
+            seen.add(snapshot.player)
+            stalled = False
+            if (snapshot.status or "").lower() == "playing" and snapshot.position and snapshot.position > 0:
+                previous = self._media_progress.get(snapshot.player)
+                if previous is None or abs(previous[0] - snapshot.position) > 0.5:
+                    self._media_progress[snapshot.player] = (snapshot.position, now)
+                elif now - previous[1] >= MEDIA_STALL_S:
+                    stalled = True
+            else:
+                self._media_progress.pop(snapshot.player, None)
+            if stalled:
+                self._counters["media_stalled"] += 1
+                out.append(dataclasses.replace(snapshot, status="paused"))
+            else:
+                out.append(snapshot)
+        for gone in [name for name in self._media_progress if name not in seen]:
+            self._media_progress.pop(gone, None)
+        return out
 
     def _poll_window_state(self) -> None:
         if self._recorder.locked:
