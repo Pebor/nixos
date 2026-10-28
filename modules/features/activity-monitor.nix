@@ -15,8 +15,16 @@
       hyprmon = pkgs.writeShellScriptBin "hyprmon" ''
         ${pathFix}exec ${py} ${../../resources/hyprmon/hyprmon.py} "$@"
       '';
+      # The report writes a single-file dashboard from a template it looks up as
+      # `<script dir>/dashboard.html`, so both files must live in one directory:
+      # interpolating the .py alone would put it in /nix/store with no template.
+      reportDir = pkgs.runCommand "hyprmon-report-src" { } ''
+        mkdir -p $out
+        cp ${../../resources/hyprmon/hyprmon-report.py} $out/hyprmon-report.py
+        cp ${../../resources/hyprmon/dashboard.html} $out/dashboard.html
+      '';
       hyprmon-report = pkgs.writeShellScriptBin "hyprmon-report" ''
-        ${pathFix}exec ${py} ${../../resources/hyprmon/hyprmon-report.py} "$@"
+        ${pathFix}exec ${py} ${reportDir}/hyprmon-report.py "$@"
       '';
       # Unsigned XPI of the companion extension. Zen 1.23 honours
       # xpinstall.signatures.required=false, so a profile-local XPI loads on

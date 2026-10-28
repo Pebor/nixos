@@ -26,6 +26,8 @@ import json
 import math
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tomllib
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -35,6 +37,11 @@ ONE_DAY = dt.timedelta(days=1)
 DEFAULT_INPUT = "~/.local/share/hyprmon/"
 DEFAULT_CONFIG = "~/.config/hyprmon/hyprmon.toml"
 DEFAULT_OUT = "./hyprmon-report-out"
+# Disposable single-file dashboards live in the cache: he does not want report
+# files piling up on the laptop where someone else could stumble over them.
+DEFAULT_DASHBOARD_DIR = "~/.cache/hyprmon/reports"
+DEFAULT_DASHBOARD_KEEP = 5
+DEFAULT_DASHBOARD_TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
 DEFAULT_MEDIA_MAX_GAP_MIN = 30.0
 DEFAULT_LOOKBACK_DAYS = 1
 HEATMAP_FULL_MINUTES = 60.0  # heatmap intensity 1.0 == 60 active minutes in an hour
@@ -1642,7 +1649,81 @@ def build_parser():
                    help="max media Playing run when the player sent no Paused/Stopped (default %(default)s)")
     p.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS,
                    help="extra day files read before the window for open state (default %(default)s)")
+    dash = p.add_argument_group("dashboard (single self-contained file, opened for you)")
+    dash.add_argument("--app", default=os.environ.get("HYPRMON_DASHBOARD", DEFAULT_DASHBOARD_TEMPLATE),
+                      metavar="HTML",
+                      help="dashboard template (default: dashboard.html next to this script, "
+                           "or $HYPRMON_DASHBOARD)")
+    dash.add_argument("--dashboard-dir", default=DEFAULT_DASHBOARD_DIR, metavar="DIR",
+                      help=f"where disposable dashboards are written (default {DEFAULT_DASHBOARD_DIR})")
+    dash.add_argument("--keep", type=int, default=DEFAULT_DASHBOARD_KEEP, metavar="N",
+                      help="delete all but the newest N dashboards (default %(default)s)")
+    dash.add_argument("--no-dashboard", dest="dashboard", action="store_false",
+                      help="write only report.html, skip the dashboard")
+    dash.add_argument("--no-open", dest="open_browser", action="store_false",
+                      help="do not open the dashboard (it opens by default)")
+    p.set_defaults(dashboard=True, open_browser=True)
     return p
+
+
+def prune_dashboards(out_dir: str, keep: int) -> list[str]:
+    """Delete all but the newest ``keep`` dashboards — the files are disposable."""
+    try:
+        names = [n for n in os.listdir(out_dir) if n.startswith("hyprmon-") and n.endswith(".html")]
+    except OSError:
+        return []
+    paths = sorted((os.path.join(out_dir, n) for n in names), key=os.path.getmtime, reverse=True)
+    removed = []
+    for path in paths[max(keep, 1):]:
+        try:
+            os.remove(path)
+            removed.append(path)
+        except OSError:
+            pass
+    return removed
+
+
+def write_dashboard(aggr, template_path: str, out_dir: str, key: str, keep: int) -> str | None:
+    """Write the self-contained dashboard, with the aggregates embedded.
+
+    One HTML file, no server and no fetch: it opens from file:// and nothing ever
+    leaves the machine. Returns None when the template is missing.
+    """
+    if not template_path or not os.path.isfile(template_path):
+        return None
+    with open(template_path, encoding="utf-8") as fh:
+        template = fh.read()
+    # "</" would end the script element early; JSON never needs a raw one.
+    payload = json.dumps(aggr, separators=(",", ":"), ensure_ascii=False).replace("</", "<\\/")
+    injected = ('<body><script id="hyprmon-data" type="application/json">'
+                + payload + "</script>")
+    html = template.replace("<body>", injected, 1)
+    os.makedirs(out_dir, exist_ok=True)
+    stamp = dt.datetime.now().strftime("%H%M%S-%f")[:-3]
+    base = os.path.join(out_dir, f"hyprmon-{key}-{stamp}")
+    path = base + ".html"
+    suffix = 2
+    while os.path.exists(path):  # two reports in the same millisecond
+        path = f"{base}-{suffix}.html"
+        suffix += 1
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(html)
+    prune_dashboards(out_dir, keep)
+    return path
+
+
+def open_in_browser(path: str) -> bool:
+    """Open the report without blocking the CLI; False when xdg-open is missing."""
+    opener = shutil.which("xdg-open")
+    if opener is None:
+        return False
+    try:
+        subprocess.Popen([opener, path], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except OSError:
+        return False
+    return True
 
 
 def main(argv=None):
@@ -1680,6 +1761,19 @@ def main(argv=None):
           f"unclassified: {h['span_unclassified_percent_time']:.1f}% of active time")
     print(f"wrote {agg_path}")
     print(f"wrote {html_path}")
+
+    if args.dashboard:
+        dashboard_dir = os.path.abspath(os.path.expanduser(args.dashboard_dir))
+        w = aggr["window"]
+        key = w["from"] if w["from"] == w["to"] else f"{w['from']}_{w['to']}"
+        template = os.path.abspath(os.path.expanduser(args.app))
+        dashboard_path = write_dashboard(aggr, template, dashboard_dir, key, args.keep)
+        if dashboard_path is None:
+            print(f"hyprmon-report: dashboard template not found at {template}", file=sys.stderr)
+        else:
+            print(f"wrote {dashboard_path}")
+            if args.open_browser and not open_in_browser(dashboard_path):
+                print("hyprmon-report: xdg-open not available - open the file manually", file=sys.stderr)
     return 0
 
 

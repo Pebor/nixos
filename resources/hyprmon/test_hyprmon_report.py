@@ -123,5 +123,43 @@ class FormattingTests(unittest.TestCase):
         self.assertEqual(svg.count("<circle"), 2)
 
 
+class DashboardTests(unittest.TestCase):
+    def test_write_dashboard_embeds_aggregates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            template = Path(tmp) / "template.html"
+            template.write_text("<!doctype html><html><body><div id=app></div></body></html>", encoding="utf-8")
+            out = Path(tmp) / "reports"
+            aggr = {"window": {"from": "2026-10-28", "to": "2026-10-28"}, "totals": {"active_minutes": 61}}
+            path = r.write_dashboard(aggr, str(template), str(out), "2026-10-28", 5)
+            self.assertIsNotNone(path)
+            html = Path(path).read_text(encoding="utf-8")
+            self.assertIn('id="hyprmon-data"', html)
+            self.assertIn('"active_minutes":61', html)
+
+    def test_write_dashboard_escapes_closing_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            template = Path(tmp) / "template.html"
+            template.write_text("<html><body></body></html>", encoding="utf-8")
+            aggr = {"trap": "</script><b>x</b>"}
+            path = r.write_dashboard(aggr, str(template), str(Path(tmp) / "o"), "k", 5)
+            html = Path(path).read_text(encoding="utf-8")
+            self.assertNotIn("</script><b>", html)
+            self.assertIn("<\\/script>", html)
+
+    def test_dashboards_are_pruned_to_keep(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            template = Path(tmp) / "template.html"
+            template.write_text("<html><body></body></html>", encoding="utf-8")
+            out = Path(tmp) / "reports"
+            aggr = {"window": {"from": "2026-10-28", "to": "2026-10-28"}}
+            for i in range(7):
+                path = r.write_dashboard(aggr, str(template), str(out), "2026-10-28", 5)
+                os.utime(path, (1_700_000_000 + i, 1_700_000_000 + i))
+            self.assertEqual(len(list(out.glob("hyprmon-*.html"))), 5)
+
+    def test_missing_template_returns_none(self) -> None:
+        self.assertIsNone(r.write_dashboard({}, "/nonexistent/x.html", "/tmp/never", "k", 5))
+
+
 if __name__ == "__main__":
     unittest.main()
