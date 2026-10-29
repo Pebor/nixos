@@ -45,6 +45,7 @@
       hermes
       hermes-secrets-sync
       battery-guard
+      console-guard
       build-worker
       harmonia
       cache-warm
@@ -54,9 +55,13 @@
     networking.hostName = "t490s";
     system.stateVersion = "24.11";
 
-    # Headless console: tty1 auto-logs in as `server` so a local reboot
-    # never dead-ends at a login prompt (real access is key-only ssh).
-    services.getty.autologinUser = "server";
+    # Headless console: NO autologin (since 2026-10-28). The box sits in a
+    # shared dorm room; an autologged tty1 handed whoever opened the lid a
+    # `wheel` shell with passwordless sudo. A local reboot now ends at a
+    # `login:` prompt for `server` — password required. Remote access is
+    # unchanged (key-only ssh on the tailnet). console-guard.nix also kills a
+    # console session that is left idle or whose lid gets closed.
+    # (No `autologinUser` set = the option's default, i.e. a password prompt.)
     programs.fish.enable = true;
 
     services.resolved.enable = true;
