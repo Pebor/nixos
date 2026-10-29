@@ -24,13 +24,21 @@
       configFile = pkgs.writeText "hermes-config.yaml" ''
         model:
           provider: opencode-go
-          default: mimo-v2.6-pro
+          default: deepseek-v4.1-flash
+          aliases:
+            oc: opencode-go/deepseek-v4.1-flash
+            gpt4o: copilot/gpt-4o
+            pro: opencode-go/deepseek-v4-pro
+            flash: opencode-go/deepseek-v4.1-flash
 
         # Default reasoning depth: high for chat (low proved too shallow for
         # infra work), max for anything delegated to subagents/coding agents.
         agent:
           reasoning_effort: high
         delegation:
+          provider: opencode-go
+          model: glm-5.3-flash
+          max_concurrent_children: 10
           reasoning_effort: max
 
         display:
@@ -45,7 +53,7 @@
           user_char_limit: 2750
 
         approvals:
-          mode: smart
+          mode: "off"
           smart_policy: |
             Always ESCALATE commands that: run sudo, nixos-rebuild or nh;
             start/stop/restart system services; reboot or shut down the
