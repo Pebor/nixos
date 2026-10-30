@@ -90,6 +90,15 @@
       ipv6 = { method = "auto"; };
     };
 
+    # --- WiFi radio: powersave OFF (2026-10-30) ------------------------
+    # Valheim rubber-banding traced to the radio napping between frames:
+    # t14 -> t490s measured min 3.6 ms but max 117 ms, and a 20-min sample
+    # earlier caught multi-second freezes. The laptop is a mains-powered
+    # server, so power saving buys nothing and costs latency.
+    # Verify: `nmcli -f 802-11-wireless.powersave connection show <active>`
+    # must report 2 (disable).
+    networking.networkmanager.wifi.powersave = false;
+
     # journald had no cap at all: the journal held 8 months / 2.1 M lines /
     # 1.4 GB and grew forever (a 30 s docker healthcheck alone contributes
     # ~1 900 lines/day). Logs are for recent debugging, so bound both size

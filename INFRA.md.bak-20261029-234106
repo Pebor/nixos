@@ -1,0 +1,131 @@
+# INFRA — what runs where
+
+Single index of every service, its port, its exposure and its runbook.
+**This is state, not procedure:** how to *operate* a stack lives in its
+runbook (`~/<stack>/README.md`) or in the agent's skills; how the *host* is
+built lives in `README.md` (this repo).
+
+Verified live on **2026-10-29** (docker ps + `ss -lntup` + tailsale serve +
+DNS resolve). If you change a stack, change the row in the same commit —
+a stale row here is worse than no row.
+
+## Hosts
+
+| host | tailnet | public | role |
+|---|---|---|---|
+| `t490s-server` | `100.103.136.50` | none (ČVUT dorm NAT) | all app stacks + nix builder/binary cache + agent |
+| `lesbian-4gb` (Hetzner VPS) | `100.117.69.56` | `178.104.163.147` | public front door (Caddy), game relays, misc selfhosted |
+| `t14` | `100.86.253.100` | none | Pebor's daily driver, often suspended/offline |
+| `t420`, `desktop` | — | — | not in active use |
+
+The t490s has **no inbound port forwarding** — anything reachable from the
+internet goes through the VPS or a tailnet peer.
+
+## t490s — compose stacks
+
+Convention: each stack lives in `~/<name>/` and owns its compose file, config,
+data and backups. Runbooks are `~/<name>/README.md`.
+
+| stack | containers | internal port | reachable as | data | runbook | in restic |
+|---|---|---|---|---|---|---|
+| `edge` | `edge-caddy-1`, `edge-dnsmasq-1`, `edge-demo-bridge-1` | `80/443/8080` tcp, `53` (tailnet IP only) | the public front door | `~/edge` | ✅ | ✅ |
+| `filebrowser` | `filebrowser`, `onlyoffice` | `80` (fb), `80` (oo), internal | `cloud.pebor.me` (public, login required) + `office.pebor.me` (tailnet only) | `~/files` (the files store), `~/filebrowser/data` (db+index), `~/filebrowser/onlyoffice` | ✅ | ✅ |
+| `beszel` | `beszel`, `beszel-agent` | `127.0.0.1:8090` (hub), agent pushes out | `mon.pebor.me` (tailnet only) | `~/beszel/{beszel_data,beszel_agent_data}` | ✅ | ✅ |
+| `radicale` | `radicale` | `5232` internal | `cal.pebor.me` (tailnet only) | `~/radicale/data` | ❌ | ✅ |
+| `vikunja` | `vikunja` | `3456` internal | `tasks.pebor.me` (tailnet only) + `/tasks` on cloud | `~/vikunja/{db,files}` | ❌ | ✅ |
+| `vaultwarden` | `vaultwarden-app-1`, `-backup-1` | `127.0.0.1:8085` | `https://t490s.tail16a6c9.ts.net:8445` (tailnet only) | `/var/lib/vaultwarden` | ✅ | own sidecar |
+| `valheim` | `valheim` | `100.103.136.50:2456-2458/udp`, `2458/tcp` (RCON, tailnet only) | `178.104.163.147:2456` (public, via VPS relay) | `~/valheim/config` | ✅ | ✅ |
+| `backup` | `backup-backup-1` | — | — | `~/backup/backups` (restic repo) | ❌ | — |
+| `nextcloud` | all exited | — | dark = rollback only | `~/nextcloud` | ✅ | old sidecar |
+
+## t490s — outside compose (declarative nix)
+
+| what | listen | reachable as | notes |
+|---|---|---|---|
+| Hermes agent | `127.0.0.1:9119` | `https://ai.dash.pebor.me` (also `…ts.net:8444`) | dashboard, login required; container sits on `edge_proxy` so Caddy can proxy to `hermes:9119` |
+| Demos drop | `:8443` via `tailscale serve` | `https://demo.pebor.me` (also `…ts.net:8443`) | static dir `/var/lib/hermes/personal/demos`, mounted ro into edge Caddy as `/srv/demos`; `/api/agent/*` → `demo-bridge:9120` (agent bridge: drží API klíč + CORS) |
+| Harmonia binary cache | `100.103.136.50:5000` | tailnet only | socket-activated; bound to the tailnet IP since 2026-10-25 |
+| sshd | `0.0.0.0:22` | key-only | `server` account, passwordless sudo |
+
+## Name → backend
+
+Split DNS: `edge-dnsmasq-1` (`~/edge/dnsmasq.conf`, `host-record=…`) answers
+for the tailnet only; `cloud.pebor.me` additionally resolves publicly at
+Cloudflare (DNS-only) and is served by the VPS Caddy → back to the t490s on
+`:8080`.
+
+| name | resolves to | served by | backend |
+|---|---|---|---|
+| `cloud.pebor.me` | `100.103.136.50` | VPS Caddy → t490s `:8080` twin | `filebrowser` `/` (incl. `/dav` WebDAV, `/s` share links), Vikunja `/tasks`, old NC paths `410` |
+| `cal.pebor.me` | `100.103.136.50` (tailnet) | edge Caddy | `radicale:5232` |
+| `tasks.pebor.me` | `100.103.136.50` (tailnet) | edge Caddy | `vikunja:3456` |
+| `office.pebor.me` | `100.103.136.50` (tailnet) | edge Caddy | `onlyoffice:80` — office editor for filebrowser (docx/xlsx/pptx) |
+| `mon.pebor.me` | `100.103.136.50` (tailnet) | edge Caddy | `beszel:8090` — monitoring hub (agent `beszel-agent` pushes in over WS) |
+| `demo.pebor.me` | `100.103.136.50` (tailnet) | edge Caddy | static `/srv/demos` (mounted from `/var/lib/hermes/personal/demos`), `/api/agent` → `demo-bridge` |
+| `fin.pebor.me` | `100.103.136.50` (tailnet) | edge Caddy | `fin:8000` — finance app (FastAPI + SQLite + PWA) in `~/fin`; data `~/fin/data/fin.db`, PIN cookie pro prohlížeč + `X-API-Key` pro agenta, restic snapshot v `backup` stacku. Nahradilo statický dashboard i `finances.xlsx` |
+| `ai.dash.pebor.me` | `100.103.136.50` (tailnet) | edge Caddy | `hermes:9119`, login required. `dash.pebor.me` kept free for a dashboard hub |
+| `git.pebor.me` | VPS | VPS Caddy | `forgejo` |
+
+## VPS `lesbian-4gb`
+
+Baseline verified live 2026-10-25 (`docker ps`, systemd, nft counters).
+
+| what | port | notes |
+|---|---|---|
+| `server-caddy-proxy-1` | `0.0.0.0:80/443` | Caddyfile = `/home/pebor/server/Caddyfile` |
+| `forgejo` | `0.0.0.0:222` → container `22` | `git.pebor.me` behind Caddy |
+| `server-sp1-1` + `-db-1` + `-backup-1` | `127.0.0.1:5432` (db, loopback only) | Super Productivity + its own backup sidecar |
+| `logseq-selfhost-sync` | `0.0.0.0:8787` | private |
+| `notifun`, `server-vizcube-1` | internal `3000` / `80,443` | behind Caddy |
+| `minecraft.service` | `*:25565` | **systemd unit, not compose** — moving to t490s (kanban #18) |
+| `valheim-relay.service` | nftables DNAT `2456-2458/udp` → `100.103.136.50` | `active (exited)`, enabled; counters moving (34 pkt DNAT / 36 MASQ on 2026-10-25) |
+| `beszel-agent` (compose, `~/beszel`) | host network, dials **out** to `wss://mon.pebor.me` | reports this VPS to the hub on t490s; no inbound port, firewall untouched. System shows as `vps` |
+| `ssh` | `0.0.0.0:1234` | key-only, `pebor`, NOPASSWD sudo |
+
+Baseline resources: `3.7 GiB` RAM (≈`200 MiB` free), `38 GB` disk (`9.6 G` used, `27 G` free).
+
+Hetzner Cloud firewall: only `80/443/1234` tcp, `41641` udp and `2456-2458`
+udp pass. **Outbound rules must stay EMPTY** — one outbound rule silently
+kills apt/ACME egress.
+
+## Backups
+
+- One restic sidecar (`backup` stack), nightly **03:30**, repo
+  `/home/server/backup/backups`, log `~/backup/backups/*.log`.
+- Covers: the files store (`~/files`), hot sqlite snapshots (`sqlite3 .backup`) of
+  filebrowser, vikunja, **fin** and **hermes `state.db`**, hermes
+  `memories/ skills/ plugins/ personal/` (`.env`/`secrets.env` excluded — they live
+  in Bitwarden), beszel hub data, radicale data, valheim config, plus the stack
+  dirs (`~/filebrowser`, `~/beszel`, `~/vikunja`, `~/radicale`, `~/edge`,
+  `~/valheim`, `~/fin`). Vaultwarden has its own sidecar.
+- Retired stacks (`~/collabora`, `~/copyparty`, `~/nextcloud`) were deleted on
+  2026-10-29 and are intentionally NOT backed up.
+- ⚠️ **Local only** — same NVMe as the data, no offsite target yet.
+
+## Secrets
+
+Source of truth is Vaultwarden (tailnet `:8445`), service account
+`hermes@pebor.me`, items named `<system>/<thing>` (e.g. `valheim/server-pass`,
+`filebrowser/sp-token`, `vikunja/*`, `restic/t490s-cloud`). **No values belong in this
+file**, and `docker inspect` env dumps are off limits (they print every secret).
+
+## Known gaps (2026-10-29)
+
+1. Three stacks have **no runbook**: `radicale`, `vikunja`, `backup`
+   (`filebrowser` has one now).
+2. `minecraft` still runs on the VPS — migration is kanban #18.
+3. Backups have no offsite copy.
+4. `nextcloud` and `copyparty` are dark (kept as rollback, data intact).
+5. The `t490s-homelab.html` demo on `:8443` still shows the retired
+   Nextcloud-era path — superseded by `infra-map-2026-10-25.html`.
+
+## Re-verify this file
+
+```bash
+ssh server@host.docker.internal bash -s <<'EOF'
+export PATH=/run/current-system/sw/bin:/run/wrappers/bin:$PATH
+docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}' | sort
+ss -lntup | awk 'NR>1{print $1, $5}' | sort -u
+tailscale serve status
+EOF
+```
