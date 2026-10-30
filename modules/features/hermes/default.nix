@@ -63,6 +63,17 @@
             say in one sentence what it will change.
           deny:
             - "git push*--force*"
+
+        # Telegram: keep updates that arrive while the gateway is down.
+        # Default true silently threw away a finance note typed during a
+        # restart (card #24); the storm risk after a long outage is handled by
+        # draining the queue on purpose, not by losing messages by default.
+        platforms:
+          telegram:
+            extra:
+              status_indicator: true
+              dm_topic_auto_transfer: true
+              drop_pending_on_cold_boot: false
       '';
 
       soulFile = pkgs.writeText "hermes-SOUL.md" ''
@@ -217,7 +228,12 @@
       virtualisation.oci-containers.backend = "docker";
 
       virtualisation.oci-containers.containers.hermes = {
-        image = "nousresearch/hermes-agent:latest";
+        # DERIVED image, not upstream: `images/hermes/Dockerfile` = upstream + the
+        # patches in `images/hermes/patches/` baked in at build time. A runtime patch
+        # under /opt/hermes is duct tape — an image pull or a container re-create
+        # drops it silently. Built by hermes-image-build (below) before this unit
+        # starts; `--pull missing` in the pre-start then never replaces the local tag.
+        image = "hermes-agent:patched";
         # NOT "gateway run": image >= 0.22 supervises the gateway itself —
         # cont-init.d/02-reconcile-profiles auto-starts it as an s6 service
         # (desired_state=running persists in ${stateDir}/gateway_state.json).
@@ -264,6 +280,31 @@
           # edge_proxy the tailnet IP is dead from here, so the pin only
           # shadowed the name with an unreachable address.
         ];
+      };
+
+      # Derived image build. Ordering-only on purpose: if the build fails (upstream rewrite
+      # broke a patch anchor) the previous hermes-agent:patched image is still there and the
+      # container starts from it — never a refused container start. The build context is a
+      # store path, so editing a patch changes this unit's script and the next switch
+      # rebuilds the image.
+      #
+      # NO --pull: the base is whatever `nousresearch/hermes-agent:latest` is locally, so a
+      # rebuild never silently upgrades Hermes. Upgrading is an explicit two-step:
+      #   docker pull nousresearch/hermes-agent:latest && systemctl start hermes-image-build
+      systemd.services.hermes-image-build = {
+        description = "Build derived hermes-agent:patched image (upstream + our patches)";
+        after = [ "docker.service" ];
+        before = [ "docker-hermes.service" ];
+        wantedBy = [ "multi-user.target" ];
+        path = [ config.virtualisation.docker.package pkgs.coreutils ];
+        script = ''
+          docker build -t hermes-agent:patched ${../../../images/hermes}
+        '';
+        serviceConfig = {
+          Type = "oneshot";
+          TimeoutStartSec = "30min";
+          RemainAfterExit = true;
+        };
       };
 
       environment.systemPackages = [ hermes ];
