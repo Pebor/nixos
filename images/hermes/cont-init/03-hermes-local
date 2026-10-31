@@ -1,0 +1,55 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# Container-boot wiring for OUR code (card #52, 2026-10-31).
+#
+# Plugins and helper scripts used to live only in the state volume
+# ($HERMES_HOME/plugins, $HERMES_HOME/scripts): not git-versioned, invisible in
+# review, and gone with a lost volume. They now ship INSIDE the derived image
+# (images/hermes/{plugins,scripts}/), so this script makes the volume agree:
+#
+#   1. a plugin copy in $HERMES_HOME/plugins SHADOWS the bundled one — the
+#      loader scans bundled first but "later sources win", so a stale user copy
+#      would silently pin the old code forever. Park it once (nothing deleted)
+#      and let the image copy load.
+#   2. the cron runner resolves `script:` names under $HERMES_HOME/scripts, so
+#      the sweep scripts are symlinked to their image copies.
+#
+# Idempotent: parked copies land in $HERMES_HOME/plugins.retired/, so a second
+# boot finds nothing left to move.
+set -u
+
+HOME_DIR="${HERMES_HOME:-/opt/data}"
+RETIRED="$HOME_DIR/plugins.retired"
+
+for name in allowance-ledger desktop-notify reasoning-now telegram-topic-cleaner; do
+    target="/opt/hermes/plugins/$name"
+    copy="$HOME_DIR/plugins/$name"
+    [ -d "$target" ] || continue
+    if [ -e "$copy" ] || [ -L "$copy" ]; then
+        mkdir -p "$RETIRED"
+        if mv "$copy" "$RETIRED/$name" 2>/dev/null; then
+            echo "hermes-local: parked $copy -> $RETIRED/$name (image copy now loads)"
+        else
+            echo "hermes-local: WARNING cannot park $copy - the volume copy still shadows the image" >&2
+        fi
+    fi
+done
+
+for f in topic_sweep.py topic_sweep.sh topic_sweep_daily.sh; do
+    src="/opt/hermes-local/scripts/$f"
+    dst="$HOME_DIR/scripts/$f"
+    [ -f "$src" ] || continue
+    mkdir -p "$HOME_DIR/scripts"
+    if [ -L "$dst" ] && [ "$(readlink "$dst")" = "$src" ]; then
+        continue
+    fi
+    if [ -e "$dst" ] && [ ! -L "$dst" ]; then
+        mkdir -p "$HOME_DIR/scripts.retired"
+        mv "$dst" "$HOME_DIR/scripts.retired/$f" 2>/dev/null \
+            && echo "hermes-local: parked $dst -> $HOME_DIR/scripts.retired/$f"
+    fi
+    chmod 0755 "$src"
+    ln -sf "$src" "$dst"
+done
+
+exit 0

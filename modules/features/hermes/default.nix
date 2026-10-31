@@ -64,10 +64,23 @@
           deny:
             - "git push*--force*"
 
+        # Our plugins ship INSIDE the derived image (images/hermes/plugins/, card
+        # #52): git is the source of truth, the state volume holds only state. A
+        # fresh volume therefore needs just this list to reproduce the setup.
+        plugins:
+          enabled:
+            - allowance-ledger
+            - dashboard_auth/basic
+            - desktop-notify
+            - reasoning-now
+            - telegram-topic-cleaner
+          disabled: []
+
         # Telegram: keep updates that arrive while the gateway is down.
         # Default true silently threw away a finance note typed during a
         # restart (card #24); the storm risk after a long outage is handled by
         # draining the queue on purpose, not by losing messages by default.
+
         platforms:
           telegram:
             extra:

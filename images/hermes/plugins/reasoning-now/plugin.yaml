@@ -1,0 +1,7 @@
+name: reasoning-now
+version: 1.0.0
+description: "Set the reasoning effort for the current chat and ask in the SAME message: `/rnow max <question>` sets effort to max on this session and sends <question> as a normal turn. Bare `/rnow <level>` sets it and confirms. `/rnow reset` clears the session override. Ingress hook (pre_gateway_dispatch) — the message is rewritten before dispatch, so the question is never eaten by command parsing."
+author: "Hermes Agent"
+provides_hooks:
+  - pre_gateway_dispatch
+provides_commands: []

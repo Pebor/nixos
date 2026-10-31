@@ -1,0 +1,8 @@
+name: desktop-notify
+version: 0.1.0
+description: "Pops a native desktop notification on the T14 (notify-send over ssh) after every assistant turn, so replies are still visible when Telegram Desktop shows none for a threaded bot chat. Fail-open; when the laptop is asleep the alert is dropped, never buffered. Exposes /notifytest."
+author: "Hermes Agent"
+provides_hooks:
+  - post_llm_call
+provides_commands:
+  - notifytest

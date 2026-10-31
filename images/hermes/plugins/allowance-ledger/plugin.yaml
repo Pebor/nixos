@@ -1,0 +1,10 @@
+name: allowance-ledger
+version: 1.2.0
+description: "Shows what every reply really cost: appends the OpenCode Go allowance spent by the turn (plus the session total) to the message, tracks every request in a JSONL ledger, exposes /cost, and warns inside the turn while a 2x peak-pricing window is open."
+author: "Hermes Agent"
+provides_hooks:
+  - post_api_request
+  - pre_llm_call
+  - transform_llm_output
+provides_commands:
+  - cost

@@ -1,0 +1,11 @@
+name: telegram-topic-cleaner
+version: 1.0.0
+description: "List, delete and sweep the Telegram DM topics Hermes created: /topics shows id, age and last activity, /topicdel removes the current or a named topic, /topicsweep <days> [yes] prunes idle ones (dry-run by default). Deletes the topic in Telegram and prunes its stale binding in state.db; sessions and history stay searchable."
+author: "Hermes Agent"
+provides_hooks: []
+provides_commands:
+  - topics
+  - topicdel
+  - topiclock
+  - topicunlock
+  - topicsweep
