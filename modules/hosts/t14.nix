@@ -196,6 +196,7 @@
       hyprland
       activity-monitor
       stylix
+      tmux
 
       packages-terminal
       hermes-client
