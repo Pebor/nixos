@@ -25,8 +25,8 @@
 
       extraConfig = ''
         # --- panes / windows ---------------------------------------------------
-        # Stock % and " splits are kept as-is (cz-coder has both unshifted).
-        # New windows inherit the current pane's directory.
+        bind | split-window -h -c "#{pane_current_path}"
+        bind \\ split-window -v -c "#{pane_current_path}"
         bind c new-window -c "#{pane_current_path}"
 
         # --- floating panes (tmux >= 3.8) --------------------------------------
@@ -39,15 +39,32 @@
         bind -T copy-mode-vi y send -X copy-selection-and-cancel
         bind -T copy-mode-vi Y send -X copy-line
 
-        # --- look: one bar, nothing per-pane -----------------------------------
+        # --- look: one flat bar, nothing per-pane ------------------------------
         setw -g pane-border-lines single
         setw -g pane-border-status bottom-floating
+        setw -g pane-active-border-style "fg=colour8"
         set -g pane-scrollbars modal
-        set -g status-position bottom
-        set -g status-justify left
         set -g renumber-windows on
         set -g set-titles on
         set -g set-titles-string "#S:#I:#W"
+
+        # --- status line: flat, no clock, no hostname, accent = active --------
+        # Colours are ANSI slots, so a stylix theme switch carries them along.
+        set -g status-position bottom
+        set -g status-justify left
+        set -g status-interval 5
+        set -g status-style "bg=default,fg=colour8"
+        set -g status-left-length 40
+        set -g status-left "#[fg=colour3,bold] #S #[fg=colour8]│#[default] "
+        set -g status-right-length 20
+        set -g status-right "#[fg=colour3]#{?client_prefix,^B ,}#[fg=colour8]#{?window_zoomed_flag,Z ,}#[default] "
+        setw -g window-status-style "bg=default,fg=colour8"
+        setw -g window-status-current-style "bg=default,fg=colour3,bold"
+        setw -g window-status-format " #[fg=colour8]#I:#W "
+        setw -g window-status-current-format " #[fg=colour3,bold]#I:#W "
+        setw -g window-status-separator ""
+        setw -g window-status-activity-style "fg=colour3"
+        setw -g window-status-bell-style "fg=colour1,bold"
 
         # --- niceties ----------------------------------------------------------
         set -g detach-on-destroy off
