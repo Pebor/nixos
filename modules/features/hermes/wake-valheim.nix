@@ -2,7 +2,8 @@
 #
 # Hráči píšou do Valheim chatu; QoL plugin (server-side) každou zprávu zapíše
 # do logu serveru jako `Chat: <hráč>: <text>`. Tenhle watcher je hloupý filtr:
-# sleduje `docker logs -f valheim` a když zpráva začíná na `hermes:`, předá
+# sleduje log kontejneru valheim (od 2026-11-01 na VPS, čte se přes ssh) a když
+# zpráva začíná na `hermes:`, předá
 # slovo agentovi (`hermes chat -q`), který odpoví zpátky do hry přes RCON.
 #
 # Záměrně to NENÍ LLM smyčka: watcher sám nespotřebuje žádné tokeny, probudí
@@ -18,6 +19,10 @@
         set -uo pipefail
 
         CONTAINER=valheim
+        # Kontejner valheim běží od 2026-11-01 na VPS (na t490s zůstala jen
+        # zastavená rollback kopie), takže log se čte přes ssh.
+        VPS=''${VALHEIM_VPS:-pebor@178.104.163.147}
+        SSH_OPTS="-p 1234 -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
         HERMES=/run/current-system/sw/bin/hermes
         AGENT_LOG=/tmp/valheim-chat-agent.log
         MIN_GAP=20
@@ -32,10 +37,10 @@
         Hráč "@@WHO@@" napsal do herního chatu:
         @@TEXT@@
 
-        Odpověz mu do herního chatu. RCON heslo najdeš na hostu v souboru
-        ~/valheim/config/bepinex/config/org.tristan.rcon.cfg (řádek Password = ...),
-        přes ssh server@host.docker.internal. Pak:
-        VALHEIM_RCON_HOST=100.103.136.50 VALHEIM_RCON_PASS=<heslo> /opt/data/bin/valheim_rcon.py "say <odpověď>"
+        Odpověz mu do herního chatu. RCON heslo najdeš na VPS v souboru
+        /home/pebor/valheim/config/bepinex/config/org.tristan.rcon.cfg (řádek Password = ...),
+        přes ssh -p 1234 pebor@178.104.163.147. Pak:
+        VALHEIM_RCON_HOST=100.117.69.56 VALHEIM_RCON_PASS=<heslo> /opt/data/bin/valheim_rcon.py "say <odpověď>"
 
         Pravidla: česky, maximálně 2 krátké věty (herní chat). Svět neměň (nedávej
         itemy, neteleportuj, nespouštěj eventy), pokud o to hráč výslovně nepožádá.
@@ -79,7 +84,7 @@ $handoff"
 
         log "starting (container=$CONTAINER)"
         while :; do
-          docker logs -f --since 1s "$CONTAINER" 2>&1 | while IFS= read -r line; do
+          ssh $SSH_OPTS "$VPS" docker logs -f --since 1s "$CONTAINER" 2>&1 | while IFS= read -r line; do
             case $line in
               *"Chat: "*) ;;
               *) continue ;;
@@ -108,7 +113,7 @@ $handoff"
         after = [ "docker.service" "network-online.target" ];
         requires = [ "docker.service" ];
         wants = [ "network-online.target" ];
-        path = with pkgs; [ docker coreutils bash ];
+        path = with pkgs; [ docker coreutils bash openssh ];
         serviceConfig = {
           ExecStart = "${watcher}";
           Restart = "always";
