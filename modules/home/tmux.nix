@@ -1,7 +1,6 @@
 # tmux with modern defaults. Prefix stays C-b so the stock bindings keep
 # working; everything else is what you would otherwise paste in by hand:
 #   - vi copy-mode, 50k history, mouse, focus events, 1-based indices
-#   - | and \ as extra split keys (%, " need Shift on a Czech layout)
 #   - one status bar, pane labels only on floating panes
 #   - prefix b = floating scratch pane; prefix Tab = stock bottom drawer
 # Floating-pane move/resize are built in: prefix g <corner/edge> (Meta
@@ -26,8 +25,8 @@
 
       extraConfig = ''
         # --- panes / windows ---------------------------------------------------
-        bind | split-window -h -c "#{pane_current_path}"
-        bind \\ split-window -v -c "#{pane_current_path}"
+        # Stock % and " splits are kept as-is (cz-coder has both unshifted).
+        # New windows inherit the current pane's directory.
         bind c new-window -c "#{pane_current_path}"
 
         # --- floating panes (tmux >= 3.8) --------------------------------------
