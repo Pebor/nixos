@@ -55,15 +55,15 @@
         set -g status-interval 5
         set -g status-style "bg=default,fg=colour8"
         set -g status-left-length 40
-        set -g status-left "#[fg=colour3,bold] #S #[fg=colour8]│#[default] "
+        set -g status-left "#[fg=colour4,bold] #S #[fg=colour8]│#[default] "
         set -g status-right-length 20
-        set -g status-right "#[fg=colour3]#{?client_prefix,^B ,}#[fg=colour8]#{?window_zoomed_flag,Z ,}#[default] "
+        set -g status-right "#[fg=colour4]#{?client_prefix,^B ,}#[fg=colour8]#{?window_zoomed_flag,Z ,}#[default] "
         setw -g window-status-style "bg=default,fg=colour8"
-        setw -g window-status-current-style "bg=default,fg=colour3,bold"
+        setw -g window-status-current-style "bg=default,fg=colour4,bold"
         setw -g window-status-format " #[fg=colour8]#I:#W "
-        setw -g window-status-current-format " #[fg=colour3,bold]#I:#W "
+        setw -g window-status-current-format " #[fg=colour4,bold]#I:#W "
         setw -g window-status-separator ""
-        setw -g window-status-activity-style "fg=colour3"
+        setw -g window-status-activity-style "fg=colour4"
         setw -g window-status-bell-style "fg=colour1,bold"
 
         # --- niceties ----------------------------------------------------------
