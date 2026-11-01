@@ -2,7 +2,8 @@
 # working; everything else is what you would otherwise paste in by hand:
 #   - vi copy-mode, 50k history, mouse, focus events, 1-based indices
 #   - one status bar, pane labels only on floating panes
-#   - prefix b = floating scratch pane; prefix Tab = stock bottom drawer
+#   - prefix b = persistent scratch session in a modal floating pane;
+#     prefix Tab = stock bottom drawer, prefix * = plain float
 # Floating-pane move/resize are built in: prefix g <corner/edge> (Meta
 # resizes too), prefix g , = Move menu, prefix g . = Move & Resize menu.
 {
@@ -29,9 +30,11 @@
         bind \\ split-window -v -c "#{pane_current_path}"
         bind c new-window -c "#{pane_current_path}"
 
-        # --- floating panes (tmux >= 3.8) --------------------------------------
-        # b = scratch shell over the current work, closed with prefix x
-        bind b new-pane -c "#{pane_current_path}" -x 90% -y 85% -X 5% -Y 5%
+        # --- scratchpad (tmux >= 3.8) ------------------------------------------
+        # b = modal floating pane running a nested client on a persistent
+        # "scratch" session: prefix b opens it, prefix d inside hides it, the
+        # session keeps running. Stock plain float stays on prefix *.
+        bind b new-pane -O -K -c "#{pane_current_path}" -x 90% -y 85% -X 5% -Y 5% "env TMUX= tmux new-session -A -s scratch"
 
         # --- copy mode (vi) ----------------------------------------------------
         bind -T copy-mode-vi v send -X begin-selection
@@ -67,6 +70,8 @@
         setw -g window-status-bell-style "fg=colour1,bold"
 
         # --- niceties ----------------------------------------------------------
+        # copy-mode y goes to the system clipboard via OSC 52 (foot supports it)
+        set -g set-clipboard on
         set -g detach-on-destroy off
         set -g display-time 2000
         bind r source-file ~/.config/tmux/tmux.conf \; display "tmux.conf reloaded"
