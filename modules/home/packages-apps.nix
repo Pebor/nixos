@@ -45,6 +45,9 @@
       # inputs.logseq-nightly.packages.${pkgs.stdenv.hostPlatform.system}.logseq-cli
       super-productivity
 
+      # Task manager with native CalDAV (Radicale on the t490s).
+      planify
+
       # r2modman
       prismlauncher
 
