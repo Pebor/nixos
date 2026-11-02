@@ -10,8 +10,10 @@
 #   cachePubKey  — /var/lib/harmonia/cache-key.pub on the server
 {
   flake.modules.nixos.build-client =
-    { pkgs, ... }:
+    { pkgs, inputs, ... }:
     let
+      # Build output monitor, also available for manual `rom build` runs.
+      rom = inputs.rom.packages.${pkgs.stdenv.hostPlatform.system}.default;
       # The server's tailscale IP (tailscale IPs are stable per machine).
       builderIp = "100.103.136.50";
       cachePubKey = "t490s-cache-1:myatSvZj3oiDANq2cOz8GhEl37gvQjdtA2LJYvB9OHI=";
@@ -50,6 +52,7 @@
       # .git dir never crosses. The mirror is a read-only build sandbox on
       # the server — source of truth stays here.
       environment.systemPackages = [
+        rom
         (pkgs.writeShellApplication {
           name = "cache-push";
           runtimeInputs = with pkgs; [ rsync openssh ];
@@ -59,7 +62,11 @@
               server@t490s:cache-warm/nixos/
             echo "nixos tree mirrored to t490s:~/cache-warm/nixos"
             if [ "''${1:-}" = "--now" ]; then
-              ssh server@t490s cache-warm
+              if [ -t 0 ] && [ -t 1 ] && [ "''${2:-}" != "--plain" ]; then
+                ssh -t server@t490s cache-warm --rom
+              else
+                ssh server@t490s cache-warm
+              fi
             else
               echo "queued for the next cache-warm run (or: cache-push --now)"
             fi

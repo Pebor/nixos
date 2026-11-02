@@ -125,7 +125,8 @@ Cache hits require an identical tree, so the client pushes its working tree
 ```bash
 hmupdate            # or nxupdate — bump the lock as usual, no commit needed
 cache-push          # mirror ~/nixos to the server; night timer picks it up
-cache-push --now    # ...or build immediately
+cache-push --now    # ...or build immediately (rom tree + version diff)
+cache-push --now --plain  # same without the TUI (scripts/agent)
 # next morning, on the t14:
 hmswitch / nxswitch # substitutes from the server instead of compiling
 ```

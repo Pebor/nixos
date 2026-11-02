@@ -993,6 +993,19 @@
     },
     "nixpkgs_10": {
       "locked": {
+        "lastModified": 1793341285,
+        "narHash": "sha256-LOv16TsMYV2/8BUYnhSxHkOASe7es2ORbqMeLlZJ8Hc=",
+        "rev": "1c89083e451e891152365b799595cf7790a43325",
+        "type": "tarball",
+        "url": "https://releases.nixos.org/nixos/unstable/nixos-26.11pre1105037.1c89083e451e/nixexprs.tar.zst"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://channels.nixos.org/nixos-unstable/nixexprs.tar.zst"
+      }
+    },
+    "nixpkgs_11": {
+      "locked": {
         "lastModified": 1710272261,
         "narHash": "sha256-g0bDwXFmTE7uGDOs9HcJsfLFhH7fOsASbAuOzDC+fhQ=",
         "owner": "NixOS",
@@ -1007,7 +1020,7 @@
         "type": "github"
       }
     },
-    "nixpkgs_11": {
+    "nixpkgs_12": {
       "locked": {
         "lastModified": 1787736819,
         "narHash": "sha256-cV5xEJJK3BvhU8rEd4mC9UsmDi5qscv/kzGPhBRC5WA=",
@@ -1023,7 +1036,7 @@
         "type": "github"
       }
     },
-    "nixpkgs_12": {
+    "nixpkgs_13": {
       "locked": {
         "lastModified": 1790689126,
         "narHash": "sha256-ilerN1WLSvF+HMjziC/Wv99J5y02maDH+6hZPwsORKg=",
@@ -1324,6 +1337,24 @@
         "type": "github"
       }
     },
+    "rom": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_10"
+      },
+      "locked": {
+        "lastModified": 1793567976,
+        "narHash": "sha256-DDoke7/RqXX/1ccS3No2DnkXo8Im8eokrGZyCDayHlk=",
+        "owner": "manic-systems",
+        "repo": "rom",
+        "rev": "f6ae054a7dcabd8c7fa3638dc96d4669ffe7a990",
+        "type": "github"
+      },
+      "original": {
+        "owner": "manic-systems",
+        "repo": "rom",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "affinity-nix": "affinity-nix",
@@ -1340,6 +1371,7 @@
         "nixpkgs": "nixpkgs_8",
         "nixpkgs-hm": "nixpkgs-hm",
         "noctalia": "noctalia",
+        "rom": "rom",
         "rose-pine-hyprcursor": "rose-pine-hyprcursor",
         "spotifast": "spotifast",
         "stylix": "stylix",
@@ -1349,7 +1381,7 @@
     "rose-pine-hyprcursor": {
       "inputs": {
         "hyprlang": "hyprlang",
-        "nixpkgs": "nixpkgs_10",
+        "nixpkgs": "nixpkgs_11",
         "utils": "utils_2"
       },
       "locked": {
@@ -1433,7 +1465,7 @@
     },
     "spotifast": {
       "inputs": {
-        "nixpkgs": "nixpkgs_11",
+        "nixpkgs": "nixpkgs_12",
         "rust-overlay": "rust-overlay_2"
       },
       "locked": {
@@ -1743,7 +1775,7 @@
     "zen-browser": {
       "inputs": {
         "home-manager": "home-manager_2",
-        "nixpkgs": "nixpkgs_12"
+        "nixpkgs": "nixpkgs_13"
       },
       "locked": {
         "lastModified": 1791770821,

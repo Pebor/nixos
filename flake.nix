@@ -57,6 +57,10 @@
 
     determinate.url = "https://flakehub.com/f/DeterminateSystems/determinate/*";
 
+    # Build output monitor used by cache-warm/cache-push. Not in our pinned
+    # nixpkgs yet; let it bring its own nixpkgs (upstream binary cache).
+    rom.url = "github:manic-systems/rom";
+
     disko = {
       url = "github:nix-community/disko";
       inputs.nixpkgs.follows = "nixpkgs";
