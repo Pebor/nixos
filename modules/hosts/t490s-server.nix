@@ -45,6 +45,7 @@
       hermes
       hermes-secrets-sync
       battery-guard
+      power-profile
       console-guard
       build-worker
       harmonia

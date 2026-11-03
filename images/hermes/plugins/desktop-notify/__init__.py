@@ -46,6 +46,9 @@ DEFAULTS: dict[str, Any] = {
     "icon": "dialog-information",
     # empty = every surface; otherwise e.g. ["telegram", "api_server"]
     "only_platforms": [],
+    # surfaces ADDED to the always-visible set (telegram); e.g. "api_server"
+    # makes the inbox/dashboard chat toast as well
+    "extra_platforms": [],
     "max_body_chars": 180,
     # skip turns whose reply is only whitespace or a bare status word
     "skip_if_shorter_than": 4,
@@ -103,6 +106,47 @@ def _snippet(text: str, limit: int) -> str:
     return ""
 
 
+# Where a reply actually lands decides whether a toast is honest. A toast for a
+# turn whose text went to the webhook caller (tasks-app comment), to cron/output
+# (deliver: local) or to a CLI announces a message he will never see -- exactly
+# the "notifications about messages that never reach Telegram" report.
+# Telegram is always visible; add more surfaces via extra_platforms.
+VISIBLE_PLATFORMS = frozenset({"telegram"})
+
+
+def _cron_delivery_platform() -> str:
+    """The cron run's auto-deliver platform (session ContextVar); "" = delivers nowhere.
+
+    The scheduler sets ``HERMES_CRON_SESSION=1`` plus the job's resolved target
+    before the turn starts (``_reload_dotenv_and_publish_delivery_target``), so an
+    empty value inside a cron run means ``deliver: local`` -- the answer only ever
+    lands in /opt/data/cron/output.
+    """
+    try:
+        from gateway.session_context import get_session_env
+
+        if (get_session_env("HERMES_CRON_SESSION", "") or "").strip() != "1":
+            return ""
+        return (get_session_env("HERMES_CRON_AUTO_DELIVER_PLATFORM", "") or "").strip().lower()
+    except Exception:  # noqa: BLE001 - unreadable context must not silence real replies
+        return ""
+
+
+def _notify_decision(platform: str, cfg: dict[str, Any]) -> tuple[bool, str]:
+    """(notify?, reason) for a finished turn, judged by where its reply lands."""
+    extra = {str(item).strip().lower() for item in (cfg.get("extra_platforms") or [])}
+    visible = set(VISIBLE_PLATFORMS) | extra
+    name = (platform or "").strip().lower()
+    if not name:
+        return True, "platform:unknown"  # cannot tell -> keep the old behaviour
+    if name == "cron":
+        dest = _cron_delivery_platform()
+        if not dest:
+            return False, "cron-local"
+        return (dest in visible), "cron->%s" % dest
+    return (name in visible), "platform:%s" % name
+
+
 def _inner_command(cfg: dict[str, Any], title: str, body: str) -> str:
     """The notify-send invocation, as the T14 session sees it.
 
@@ -137,6 +181,35 @@ def _host_script(cfg: dict[str, Any], inner: str) -> str:
         desktop=shlex.quote(str(cfg["desktop_host"])),
         inner=inner,
     )
+
+
+AUDIT = BASE / "notifications.jsonl"
+AUDIT_MAX_BYTES = 1_000_000
+
+
+def _audit(**fields: Any) -> None:
+    """One JSON line per hook decision: what was toasted, what was skipped and why.
+
+    ``attempts.log`` only held ``OK len=N``, so a report like "I get toasts about
+    messages that never reach Telegram" could not be answered from data. Every
+    branch of the hook now records its reason. Never raises: an audit trail must
+    not be able to break a turn.
+    """
+    rec: dict[str, Any] = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    for key, value in fields.items():
+        if value is None or value == "":
+            continue
+        if isinstance(value, str) and len(value) > 120:
+            value = value[:120]
+        rec[key] = value
+    try:
+        BASE.mkdir(parents=True, exist_ok=True)
+        if AUDIT.exists() and AUDIT.stat().st_size > AUDIT_MAX_BYTES:
+            AUDIT.replace(AUDIT.with_name("notifications.jsonl.1"))
+        with AUDIT.open("a") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _note(line: str) -> None:
@@ -178,7 +251,8 @@ def _notify_async(title: str, body: str) -> None:
 
     def _run() -> None:
         try:
-            _deliver(cfg, title, body)
+            ok = _deliver(cfg, title, body)
+            _audit(event="delivered" if ok else "dropped", title=title, body=body)
         except Exception:  # noqa: BLE001
             pass
 
@@ -194,21 +268,27 @@ def _on_post_llm_call(
     """Observer hook: one notification per finished turn. Returns nothing."""
     try:
         cfg = _config()
+        who = {"platform": platform, "session": session_id}
         if not cfg["enabled"]:
+            _audit(event="skip", reason="disabled", **who)
             return
-        only = cfg.get("only_platforms") or []
-        if only and platform not in only:
+        if not (assistant_response or "").strip():
+            _audit(event="skip", reason="empty", **who)
             return
-        text = assistant_response or ""
-        if not text.strip():
+        if _is_silence(assistant_response):
+            _audit(event="skip", reason="silence", body=assistant_response.strip(), **who)
             return
-        if _is_silence(text):
-            return
-        body = _snippet(text, int(cfg["max_body_chars"]))
+        body = _snippet(assistant_response, int(cfg["max_body_chars"]))
         if len(body) < int(cfg["skip_if_shorter_than"]):
+            _audit(event="skip", reason="short", body=body, **who)
+            return
+        ok, reason = _notify_decision(platform, cfg)
+        if not ok:
+            _audit(event="skip", reason=reason, body=body, **who)
             return
         cron = (session_id or "").startswith("local-")
         title = str(cfg["app_name"]) + (" ⏰" if cron else "")
+        _audit(event="send", reason=reason, title=title, body=body, **who)
         _notify_async(title, body)
     except Exception:  # noqa: BLE001 — a raising hook takes the turn down
         return
