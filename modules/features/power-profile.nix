@@ -5,15 +5,16 @@
 # A 15-minute timer keeps the machine in the right mode without anyone remembering to switch:
 #
 #   full  : performance profile, turbo on,  PL1 25 W / PL2 44 W  (08:00–00:00)
-#   quiet : low-power profile,  turbo off, PL1 10 W / PL2 15 W  (00:00–08:00)
+#   quiet : low-power profile,  turbo off, PL1 10 W / PL2 15 W  (01:00–08:00)
 #
-# Move the window with quietStart / quietEnd (hours, 24 h clock).
+# Move the window with quietStart / quietEnd (hours, 24 h clock). 1 AM on purpose: he is
+# often still working at midnight.
 { ... }:
 {
   flake.modules.nixos.power-profile = { pkgs, ... }:
     let
       rapl = "/sys/class/powercap/intel-rapl/intel-rapl:0";
-      quietStart = 0;
+      quietStart = 1;
       quietEnd = 8;
 
       applyPower = pkgs.writeShellScript "power-profile" ''
