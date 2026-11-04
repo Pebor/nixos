@@ -261,6 +261,12 @@
         volumes = [
           "${stateDir}:/opt/data"
           "/home/server/nixos:/home/server/nixos"
+          # tasks-app lives on the host and must be writable from here so agents can
+          # use `hermes chat -w` (one git worktree per worker) instead of ssh'ing to
+          # the host — two agents in one checkout interleave commits and race builds.
+          # The container user is uid 1001, which is exactly host user `server`
+          # (owner of the tree), so no permission gymnastics are needed.
+          "/home/server/tasks-app:/home/server/tasks-app"
         ];
         environment = {
           HERMES_DASHBOARD = "1";
