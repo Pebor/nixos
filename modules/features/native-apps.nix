@@ -17,6 +17,8 @@
       wrapNative = name: pkgs.writeShellScriptBin name ''
         export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath nativeLibs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         export GIO_EXTRA_MODULES="${pkgs.glib-networking}/lib/gio/modules"
+        # tasks-api listens on the tailnet; override per host if that changes
+        export TASKS_API="''${TASKS_API:-http://100.103.136.50:8001}"
         exec "$HOME/.local/bin/${name}" "$@"
       '';
     in {
