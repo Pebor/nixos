@@ -1,30 +1,14 @@
-# vmtest — Pebor's throwaway Hyprland test box on the t490s.
+# vmtest — throwaway Hyprland box for GUI testing.
 #
-# Small: 2 GB RAM, 2 cores, sparse 4 GB disk. Uses his REAL generated
-# hyprland.conf (pulled from his home-manager generation as a derivation), his
-# wallpaper and his stylix palette, so visual tests reflect production.
-#
-# Host <-> VM:
-#   /mnt/bin  (9p, ro)  the app binaries — swap them on the host, no rebuild
-#   /mnt/out  (9p, rw)  readiness marker + logs
-#   QEMU monitor socket /tmp/vmtest-mon.sock  -> screendump
-# The guest console goes to stdio, i.e. ~/vmtest-out/vm.log on the host.
+# ONE control channel: ssh -i ~/.ssh/vmtest -p 2222 pebor@127.0.0.1
+#   boot:   systemctl --user start vmtest
+#   run:    ssh ... 'nohup launchpad &'
+#   shot:   ssh ... 'grim /tmp/s.png' && scp ...
+# No 9p, no serial sockets, no guest-side services.
 { inputs, ... }:
 let
   sys = "x86_64-linux";
   wallpaper = ../../resources/wallpapers/shaded_mountains.jpg;
-  hyprConf = /nix/store/ckc3zgf2916ghki4vahp20nmyfiba9qg-hm_hyprhyprland.conf;
-
-  mkApp = pkgs: name: bin: pkgs.writeShellScriptBin name ''
-    export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath (with pkgs; [
-      libx11 libxcursor libxrandr libxi libxcb libxkbcommon
-      mesa vulkan-loader wayland fontconfig freetype
-      glib gtk3 pango cairo gdk-pixbuf harfbuzz libepoxy
-      webkitgtk_4_1 libsoup_3 glib-networking gtk-layer-shell
-    ])}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    export GIO_EXTRA_MODULES="${pkgs.glib-networking}/lib/gio/modules"
-    exec /mnt/bin/${bin} "$@"
-  '';
 in
 {
   flake.nixosConfigurations.vmtest = inputs.nixpkgs.lib.nixosSystem {
@@ -47,11 +31,17 @@ in
       extraGroups = [ "wheel" "video" "input" "render" ];
       password = "test";
       shell = pkgs.bash;
-      createHome = true;
+      openssh.authorizedKeys.keys = [ "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILzWOt2jXZyP5rp/T4oacnRAJHWYMpcg+LQKjaNxIj8B vmtest" ];
     };
     security.sudo.wheelNeedsPassword = false;
-    services.getty.autologinUser = "pebor";
 
+    services.openssh = {
+      enable = true;
+      settings.PasswordAuthentication = false;
+      settings.PermitRootLogin = "no";
+    };
+
+    services.getty.autologinUser = "pebor";
     environment.loginShellInit = ''
       if [ "$(tty)" = "/dev/tty1" ] && [ -z "$WAYLAND_DISPLAY" ]; then
         export LIBGL_ALWAYS_SOFTWARE=1
@@ -72,94 +62,69 @@ in
           inputs.self.modules.homeManager.native-apps
         ];
         home.packages = [ inputs.noctalia.packages.${sys}.default ];
-        home.file."nixos/resources/wallpapers/shaded_mountains.jpg".source = wallpaper;
+        # noctalia paints its own wallpaper layer — point it at the same image
+        xdg.configFile."noctalia/config.toml".text = ''
+          [wallpaper]
+          enabled = true
+          fill_mode = "crop"
+
+          [wallpaper.default]
+          path = "/home/pebor/nixos/resources/wallpapers/shaded_mountains.jpg"
+        '';
       };
     };
 
-    systemd.tmpfiles.rules = [
-      "d /nix/var/nix/profiles/per-user/pebor 0755 pebor users -"
-      "d /home/pebor/.config/hypr 0755 pebor users -"
-      "L+ /home/pebor/.config/hypr/hyprland.conf - - - - ${hyprConf}"
-      "d /home/pebor/.nix-profile/bin 0755 pebor users -"
-      "L+ /home/pebor/.nix-profile/bin/launchpad - - - - /run/current-system/sw/bin/vm-launchpad"
-      "L+ /home/pebor/.nix-profile/bin/agent-watch - - - - /run/current-system/sw/bin/vm-watch"
-      "L+ /home/pebor/.nix-profile/bin/webtest - - - - /run/current-system/sw/bin/vm-chat"
-      "d /mnt/bin 0755 root root -"
-      "d /mnt/out 0777 root root -"
-    ];
+    # home-manager activation does not run in the VM, so place these directly
+    system.activationScripts.vmtestFiles = {
+      text = ''
+        install -d -m 0755 -o pebor -g users /home/pebor/nixos/resources/wallpapers /home/pebor/.config/noctalia
+        install -m 0644 -o pebor -g users ${wallpaper} /home/pebor/nixos/resources/wallpapers/shaded_mountains.jpg
+        cat > /home/pebor/.config/noctalia/config.toml <<'CFG'
+        [wallpaper]
+        enabled = true
+        fill_mode = "crop"
 
-    environment.systemPackages = with pkgs; [
-      (mkApp pkgs "vm-launchpad" "launchpad")
-      (mkApp pkgs "vm-watch" "agent-watch")
-      (mkApp pkgs "vm-chat" "webtest")
-      hyprpaper noctalia foot grim imagemagick curl jq
-    ];
+        [wallpaper.default]
+        path = "/home/pebor/nixos/resources/wallpapers/shaded_mountains.jpg"
 
-    boot.supportedFilesystems = [ "9p" ];
-    hardware.graphics.enable = true;
-    hardware.graphics.enable32Bit = false;
-
-    # 9p shares, mounted by a retrying unit (fstab gave up silently at boot)
-    systemd.services.vmtest-mounts = {
-      wantedBy = [ "multi-user.target" ];
-      before = [ "vmtest-app.service" ];
-      path = [ pkgs.util-linux pkgs.coreutils ];
-      serviceConfig = { Type = "oneshot"; RemainAfterExit = true; StandardOutput = "journal+console"; StandardError = "journal+console"; };
-      script = ''
-        for i in $(seq 1 20); do
-          mountpoint -q /mnt/bin || mount -t 9p vmbin /mnt/bin -o trans=virtio,version=9p2000.L,ro
-          mountpoint -q /mnt/out || mount -t 9p vmout /mnt/out -o trans=virtio,version=9p2000.L
-          if mountpoint -q /mnt/bin && mountpoint -q /mnt/out; then echo "VM_MOUNTS_OK"; exit 0; fi
-          echo "mount attempt  failed"
-          sleep 1
-        done
-        echo "VM_MOUNTS_FAILED"
-        exit 1
+        [shell]
+        setupWizardEnabled = false
+        CFG
+        install -d -m 0755 -o pebor -g users /home/pebor/.local/state/noctalia
+        touch /home/pebor/.local/state/noctalia/.setup-complete
+        chown pebor:users /home/pebor/.local/state/noctalia/.setup-complete
+        chown pebor:users /home/pebor/.config/noctalia/config.toml
       '';
     };
+
+    hardware.graphics.enable = true;
+
+    # run a binary copied over ssh: vm-app launchpad -q ze
+    environment.systemPackages = with pkgs; [
+      grim imagemagick curl jq foot hyprpaper
+      (writeShellScriptBin "vm-app" ''
+        export LD_LIBRARY_PATH="${lib.makeLibraryPath [
+          libx11 libxcursor libxrandr libxi libxcb libxkbcommon
+          mesa vulkan-loader wayland fontconfig freetype
+          glib gtk3 pango cairo gdk-pixbuf harfbuzz libepoxy
+          webkitgtk_4_1 libsoup_3 glib-networking gtk-layer-shell
+        ]}"
+        export GIO_EXTRA_MODULES="${glib-networking}/lib/gio/modules"
+        export XDG_RUNTIME_DIR=/run/user/1000
+        export WAYLAND_DISPLAY="''${WAYLAND_DISPLAY:-wayland-1}"
+        name="$1"; shift
+        exec "$HOME/apps/$name" "$@"
+      '')
+    ];
 
     virtualisation.vmVariant.virtualisation = {
       memorySize = 2048;
       cores = 2;
       diskSize = 4096;
       graphics = false;
-      qemu.options = [
-        "-device" "virtio-vga"
-        "-monitor" "unix:/tmp/vmtest-mon.sock,server=on,wait=off"
-        "-virtfs" "local,path=/home/server/vmtest-bin,mount_tag=vmbin,security_model=none,readonly=on"
-        "-virtfs" "local,path=/home/server/vmtest-out,mount_tag=vmout,security_model=none"
+      forwardPorts = [
+        { from = "host"; host.port = 2222; guest.port = 22; }
       ];
-    };
-
-    systemd.services.vmtest-app = {
-      wantedBy = [ "multi-user.target" ];
-      after = [ "vmtest-mounts.service" ];
-      wants = [ "vmtest-mounts.service" ];
-      path = [ pkgs.coreutils pkgs.procps pkgs.bash pkgs.hyprland ];
-      serviceConfig = {
-        Type = "oneshot";
-        User = "pebor";
-        Environment = [ "LIBGL_ALWAYS_SOFTWARE=1" "GALLIUM_DRIVER=llvmpipe" "MYGO_SOFTWARE=1" ];
-        StandardOutput = "journal+console";
-        StandardError = "journal+console";
-      };
-      script = ''
-        export XDG_RUNTIME_DIR=/run/user/1000
-        for i in $(seq 1 90); do [ -S "$XDG_RUNTIME_DIR/wayland-1" ] && break; sleep 1; done
-        export WAYLAND_DISPLAY=wayland-1
-        # the host picks what to test: /mnt/bin/cmd.txt holds the command line
-        CMD=$(cat /mnt/bin/cmd.txt 2>/dev/null || true)
-        [ -n "$CMD" ] || CMD="/run/current-system/sw/bin/vm-launchpad -q ze"
-        echo "VM_APP cmd=$CMD"
-        sleep 20
-        echo "DIAG launch"
-        nohup bash -c $CMD > /tmp/app.log 2>&1 < /dev/null &
-        sleep 6
-        echo "DIAG log:"; head -15 /tmp/app.log
-        echo "DIAG clients:"; hyprctl -j clients 2>&1 | head -c 300; echo
-        echo "DIAG layers:"; hyprctl -j layers 2>&1 | head -c 400; echo
-        echo "VM_APP_READY"
-      '';
     };
   };
 }
