@@ -28,6 +28,9 @@
       dunst
       waybar
       tofi
+      gtk-layer-shell
+      webkitgtk_4_1
+      glib-networking
       brightnessctl
       inputs.rose-pine-hyprcursor.packages.${pkgs.stdenv.hostPlatform.system}.default
       wofi-emoji
@@ -245,6 +248,7 @@
           "$mainMod SHIFT, 9, movetoworkspace, 9"
           "$mainMod, S, togglespecialworkspace, magic"
           "$mainMod SHIFT, S, movetoworkspace, special:magic"
+          "$mainMod, R, exec, ~/.nix-profile/bin/launchpad"
           "$mainMod, mouse_down, workspace, e+1"
           "$mainMod, mouse_up, workspace, e-1"
         ];

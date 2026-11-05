@@ -194,6 +194,7 @@
       base
       fish
       hyprland
+      native-apps
       activity-monitor
       stylix
       tmux
