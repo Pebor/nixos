@@ -4,3 +4,4 @@ INFRA.md
 
 # nixos-rebuild build/switch leaves a `result` store symlink.
 /result
+nixos.qcow2
