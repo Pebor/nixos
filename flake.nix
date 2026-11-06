@@ -26,6 +26,14 @@
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     nixpkgs-hm.url = "github:nixos/nixpkgs/nixos-unstable";
 
+    # TEMPORARY pin (remove when unstable builds opencode again).
+    # opencode 2.2.5 in nixos-unstable has a broken node_modules FOD: hash
+    # mismatch, nothing in cache, so home-manager switch fails for every host
+    # (NixOS/nixpkgs#582673). This rev is the last one shipping 2.2.1, which IS
+    # cached. Only pkgs.opencode is taken from it — see
+    # modules/home/packages-terminal.nix.
+    nixpkgs-opencode.url = "github:nixos/nixpkgs/3e662c7cafceb2a65f612e1da9dd39f82eb39ad0";
+
     flake-parts.url = "github:hercules-ci/flake-parts";
     import-tree.url = "github:vic/import-tree";
 

@@ -943,6 +943,22 @@
         "type": "github"
       }
     },
+    "nixpkgs-opencode": {
+      "locked": {
+        "lastModified": 1793268293,
+        "narHash": "sha256-eXXkxD29MbVLxQEe3n1sISGGMtNyzEMvMYSzGrNDoF8=",
+        "owner": "nixos",
+        "repo": "nixpkgs",
+        "rev": "3e662c7cafceb2a65f612e1da9dd39f82eb39ad0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nixos",
+        "repo": "nixpkgs",
+        "rev": "3e662c7cafceb2a65f612e1da9dd39f82eb39ad0",
+        "type": "github"
+      }
+    },
     "nixpkgs-python38": {
       "locked": {
         "lastModified": 1708815994,
@@ -1370,6 +1386,7 @@
         "niri": "niri",
         "nixpkgs": "nixpkgs_8",
         "nixpkgs-hm": "nixpkgs-hm",
+        "nixpkgs-opencode": "nixpkgs-opencode",
         "noctalia": "noctalia",
         "rom": "rom",
         "rose-pine-hyprcursor": "rose-pine-hyprcursor",

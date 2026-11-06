@@ -44,10 +44,15 @@
       zellij
       yazi
 
-      opencode
+      # opencode from the temporary nixpkgs-opencode pin (2.2.1): 2.2.5 in
+      # unstable cannot build (NixOS/nixpkgs#582673). Revert to plain `opencode`
+      # and drop the input once unstable ships a buildable 2.2.5.
+      inputs.nixpkgs-opencode.legacyPackages.${pkgs.stdenv.hostPlatform.system}.opencode
+
       # pi (minimal harness): 4 tools, ~4x leaner requests than opencode,
       # uses the same OpenCode Go subscription. Kept side by side on purpose.
       pi-coding-agent
+      nodejs_22 # `pi install` / `pi update` shell out to npm
     ];
   };
 }
