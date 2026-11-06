@@ -25,6 +25,23 @@ hmupdate   # update HM nixpkgs             (daily)
 
 (aliases defined in `modules/home/fish.nix`)
 
+## Temporary package overrides
+
+Patches for upstream packaging bugs. Each one is marked `TEMPORARY` in the file
+that defines it and gets deleted once nixpkgs catches up — nothing here is
+meant to outlive the upstream fix.
+
+| package | where | waiting on |
+| ------- | ----- | ---------- |
+| `opencode` 2.2.1 | `flake.nix` (`nixpkgs-opencode` input) | nixos-unstable building 2.2.5 — [NixOS/nixpkgs#582673](https://github.com/NixOS/nixpkgs/issues/582673) |
+| `pi-coding-agent` 1.5.0 | `modules/home/packages-terminal.nix` (`piAgent`) | nixpkgs adding `@earendil-works/pi-schema` to the `postInstall` workspace loop |
+
+**pi:** the TUI starts fine, but `pi-ai` 1.5.0 imports
+`@earendil-works/pi-schema` (the new `packages/schema` workspace) and nixpkgs
+installs the monorepo workspaces by whitelist, so that package never reaches
+the store. Every *subagent* then dies at startup with `Cannot find package`.
+The override appends one `cp` to `postInstall` — the same line upstream needs.
+
 ## Adding a host
 
 1. `hardware/<name>.nix` (from `nixos-generate-config`)
