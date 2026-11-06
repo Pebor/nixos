@@ -45,6 +45,9 @@
       yazi
 
       opencode
+      # pi (minimal harness): 4 tools, ~4x leaner requests than opencode,
+      # uses the same OpenCode Go subscription. Kept side by side on purpose.
+      pi-coding-agent
     ];
   };
 }
