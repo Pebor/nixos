@@ -4,11 +4,17 @@
 # quiet-build setup, which made every build several times slower than the hardware allows.
 # A 15-minute timer keeps the machine in the right mode without anyone remembering to switch:
 #
-#   full  : performance profile, turbo on,  PL1 25 W / PL2 44 W  (08:00–00:00)
+#   full  : balanced profile, turbo on,  PL1 25 W / PL2 44 W  (08:00–00:00)
 #   quiet : low-power profile,  turbo off, PL1 10 W / PL2 15 W  (01:00–08:00)
 #
 # Move the window with quietStart / quietEnd (hours, 24 h clock). 1 AM on purpose: he is
 # often still working at midnight.
+#
+# "full" deliberately uses the `balanced` platform profile with the `powersave` governor
+# (HWP still ramps to max turbo the instant a build starts — measured 4.2 GHz under load),
+# NOT `performance`: with `performance` all 8 cores sat at 4.2–4.7 GHz even at load 0.03,
+# which kept the package at ~50 °C and the fan at ~2870 RPM around the clock.
+# Day mode means "fast when needed", not "hot while idle".
 { ... }:
 {
   flake.modules.nixos.power-profile = { pkgs, ... }:
@@ -31,7 +37,7 @@
         # Timer runs every 15 min; skip the writes when the profile already matches.
         current=$(cat /sys/firmware/acpi/platform_profile 2>/dev/null || echo unknown)
         if [ "$mode" = quiet ] && [ "$current" = low-power ]; then exit 0; fi
-        if [ "$mode" = full ] && [ "$current" = performance ]; then exit 0; fi
+        if [ "$mode" = full ] && [ "$current" = balanced ]; then exit 0; fi
 
         if [ "$mode" = quiet ]; then
           echo low-power > /sys/firmware/acpi/platform_profile 2>/dev/null || true
@@ -42,12 +48,12 @@
             echo powersave > "$c" 2>/dev/null || true
           done
         else
-          echo performance > /sys/firmware/acpi/platform_profile 2>/dev/null || true
+          echo balanced > /sys/firmware/acpi/platform_profile 2>/dev/null || true
           echo 0 > /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null || true
           echo 25000000 > ${rapl}/constraint_0_power_limit_uw 2>/dev/null || true
           echo 44000000 > ${rapl}/constraint_1_power_limit_uw 2>/dev/null || true
           for c in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-            echo performance > "$c" 2>/dev/null || true
+            echo powersave > "$c" 2>/dev/null || true
           done
         fi
         echo "power profile: $mode"

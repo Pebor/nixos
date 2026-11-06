@@ -51,6 +51,7 @@
       harmonia
       cache-warm
       valheim-chat-watcher
+      hermes-status
     ]);
 
     networking.hostName = "t490s";

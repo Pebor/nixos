@@ -38,8 +38,7 @@
       plymouth
       tailscale
       nix-ld
-      oomd
-    ]);
+      oomd    ]);
 
     networking.hostName = "t490s";
     system.stateVersion = "24.11";
