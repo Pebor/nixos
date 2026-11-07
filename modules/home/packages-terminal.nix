@@ -16,6 +16,11 @@
       # This is the same one line upstream needs — add pi-schema to the
       # postInstall loop in pkgs/by-name/pi/pi-coding-agent/package.nix.
       # Everything is built from the source tree; nothing is fetched.
+      #
+      # Fixed upstream once
+      #   curl -s https://raw.githubusercontent.com/NixOS/nixpkgs/nixos-unstable/pkgs/by-name/pi/pi-coding-agent/package.nix | grep -q pi-schema
+      # matches. Then: use plain `pi-coding-agent` in home.packages below and
+      # delete this whole let-block. A cron job tells us when that happens.
       piAgent = pkgs.pi-coding-agent.overrideAttrs (old: {
         postInstall = (old.postInstall or "") + ''
           cp -r packages/schema \
