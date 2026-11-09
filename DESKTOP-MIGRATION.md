@@ -346,14 +346,36 @@ Rules that come with it:
 - Steam layout on `@games`: library folder + `compatdata` + `shadercache` on the
   same subvolume. **Move `compatdata` with the library or games lose their
   saves** — Proton prefixes live there.
-- No swap partition; `zramSwap` (16 GB is plenty, hibernation is pointless on a
-  desktop).
 - `/` snapshots: `services.snapper` (nice-to-have — NixOS generations already
   roll the system back), `/home` → HDD via `btrbk`.
 - `noatime,compress=zstd:1,discard=async` on btrfs; HDD never in the games path.
 - `/boot`: one ESP, **systemd-boot** with generation entries — replaces hand-run
   `grub-install`/`grub-mkconfig` and `efibootmgr` editing, and makes every
   generation a boot entry (the rollback mechanism NixOS expects).
+
+### Swap & memory — 16 GB is the real bottleneck
+
+Current handling is the weakest part of the machine: 4 GB zram,
+`zswap.enabled=0` on the kernel command line, and swappiness left at the
+default 60 — so it swaps late, into a small device, with no overflow when that
+fills.
+
+Target:
+
+- **zram at 50 % of RAM** → `zramSwap.memoryPercent = 50` (≈ 8 GB of
+  zstd-compressed swap; realistically 16–24 GB of pages). Fast, zero disk I/O.
+- **8 GB swapfile on the NVMe as overflow**, so a Gradle/Android Studio run
+  never OOM-kills a game. On btrfs it needs its own `@swap` subvolume with
+  `nodatacow` and compression off (or `btrfs filesystem mkswapfile`).
+- Tuning that only makes sense together with zram: `vm.swappiness = 150`,
+  `vm.page-cluster = 0`, `vm.watermark_boost_factor = 0`,
+  `vm.min_free_kbytes = 262144`.
+- `systemd-oomd` stays (already imported), with a memory-pressure rule on
+  `user.slice` so a browser tab dies before the game does.
+- Hibernation stays off — desktop, never leaves the wall.
+
+If pressure is still a problem after this, the honest fix is 2×16 GB DDR4
+(the 5600X takes it). No amount of tuning beats another 16 GB.
 
 ---
 
@@ -469,7 +491,16 @@ booting Arch.
 
 ---
 
-## 11. Sources (checked 2026-11-08)
+## 11. Pebor's own notes (not migration blockers)
+
+- **New desktop wallpaper** — wants a different one; lands in the stylix /
+  Hyprland side of the new host, and can be done on Arch right now.
+- Memory pressure is a felt, daily problem (see §6.8) — it is the one item
+  where hardware, not config, is the real fix.
+
+---
+
+## 12. Sources (checked 2026-11-08)
 
 - [NixOS Wiki — Gaming](https://wiki.nixos.org/wiki/Gaming) — split-lock
   mitigation, `vm.max_map_count`, GameMode.
