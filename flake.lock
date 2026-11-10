@@ -853,11 +853,11 @@
     },
     "nixpkgs-hm": {
       "locked": {
-        "lastModified": 1793726008,
-        "narHash": "sha256-jQp1wKvbwWdLBASTXkSi/VYmDJ5AbBi1WvcMt9HWJC8=",
+        "lastModified": 1794042290,
+        "narHash": "sha256-ziZn2PvCJE5JEEpqTdxXwJpPB+L3YqoCpTAMCzyaP3U=",
         "owner": "nixos",
         "repo": "nixpkgs",
-        "rev": "1d060086d60cb76a40cf37109f979d88a5bd6396",
+        "rev": "f4a03c008967841f2a0b3cb7c436fc6fc31671f6",
         "type": "github"
       },
       "original": {
@@ -940,22 +940,6 @@
         "owner": "nixos",
         "repo": "nixpkgs",
         "rev": "35e0ed8d1875d2303fab9930c6eb205654a2f6a3",
-        "type": "github"
-      }
-    },
-    "nixpkgs-opencode": {
-      "locked": {
-        "lastModified": 1793268293,
-        "narHash": "sha256-eXXkxD29MbVLxQEe3n1sISGGMtNyzEMvMYSzGrNDoF8=",
-        "owner": "nixos",
-        "repo": "nixpkgs",
-        "rev": "3e662c7cafceb2a65f612e1da9dd39f82eb39ad0",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nixos",
-        "repo": "nixpkgs",
-        "rev": "3e662c7cafceb2a65f612e1da9dd39f82eb39ad0",
         "type": "github"
       }
     },
@@ -1386,7 +1370,6 @@
         "niri": "niri",
         "nixpkgs": "nixpkgs_8",
         "nixpkgs-hm": "nixpkgs-hm",
-        "nixpkgs-opencode": "nixpkgs-opencode",
         "noctalia": "noctalia",
         "rom": "rom",
         "rose-pine-hyprcursor": "rose-pine-hyprcursor",
