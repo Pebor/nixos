@@ -14,7 +14,14 @@ import os
 import sys
 from pathlib import Path
 
-PLUGIN = Path(os.getenv("HERMES_HOME", "/opt/data")) / "plugins" / "telegram-topic-cleaner" / "__init__.py"
+# The plugin ships bundled in the image tree and the user-dir copy is retired by
+# 03-hermes-local, so resolve BOTH: hardcoding only $HERMES_HOME/plugins made the
+# sweep die with FileNotFoundError for a week (2026-10-28 -> 11-02).
+PLUGIN_CANDIDATES = [
+    Path(os.getenv("HERMES_HOME", "/opt/data")) / "plugins" / "telegram-topic-cleaner" / "__init__.py",
+    Path("/opt/hermes/plugins/telegram-topic-cleaner/__init__.py"),
+]
+PLUGIN = next((p for p in PLUGIN_CANDIDATES if p.is_file()), PLUGIN_CANDIDATES[0])
 CHAT = os.getenv("TOPIC_CLEANER_CHAT", "1785855177")
 # thread this job is allowed to speak in stays protected via TOPIC_CLEANER_PROTECT
 

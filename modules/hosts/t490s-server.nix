@@ -40,6 +40,7 @@
       tailscale-serve
       oomd
       zram
+      nix-ld
 
       docker
       hermes

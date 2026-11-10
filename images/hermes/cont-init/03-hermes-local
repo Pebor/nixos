@@ -35,21 +35,20 @@ for name in allowance-ledger desktop-notify reasoning-now telegram-topic-cleaner
     fi
 done
 
+# COPY, never symlink (2026-11-07). The cron runner refuses any `script:` whose
+# resolved path leaves $HERMES_HOME/scripts, so symlinking to the image copy made
+# the daily topic sweep fail with "Blocked: script path resolves outside the
+# scripts directory" after EVERY container re-create (worked 3.-5. 11., dead
+# 6.-7. 11. once a re-create re-ran this file). The image stays the single
+# source of truth: each boot overwrites the volume copy with the image version.
 for f in topic_sweep.py topic_sweep.sh topic_sweep_daily.sh; do
     src="/opt/hermes-local/scripts/$f"
     dst="$HOME_DIR/scripts/$f"
     [ -f "$src" ] || continue
     mkdir -p "$HOME_DIR/scripts"
-    if [ -L "$dst" ] && [ "$(readlink "$dst")" = "$src" ]; then
-        continue
-    fi
-    if [ -e "$dst" ] && [ ! -L "$dst" ]; then
-        mkdir -p "$HOME_DIR/scripts.retired"
-        mv "$dst" "$HOME_DIR/scripts.retired/$f" 2>/dev/null \
-            && echo "hermes-local: parked $dst -> $HOME_DIR/scripts.retired/$f"
-    fi
-    chmod 0755 "$src"
-    ln -sf "$src" "$dst"
+    rm -f "$dst" 2>/dev/null || true
+    cp -f "$src" "$dst" && chmod 0755 "$dst" \
+        || echo "hermes-local: WARNING cannot copy $src -> $dst" >&2
 done
 
 exit 0
