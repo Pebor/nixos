@@ -129,6 +129,14 @@ let
     printf 'root:x:0:\nusers:x:100:\n' > $out/etc/group
   '';
 
+  # Hermes' sandbox browser probe expects a Playwright layout
+  # ($PLAYWRIGHT_BROWSERS_PATH/chromium-*/chrome-linux/chrome), so put the nix
+  # chromium there instead of asking for a download.
+  playwrightChromium = pkgs.runCommand "hermes-playwright-chromium" { } ''
+    mkdir -p $out/opt/playwright/chromium-1208/chrome-linux
+    ln -s ${pkgs.chromium}/bin/chromium $out/opt/playwright/chromium-1208/chrome-linux/chrome
+  '';
+
   binPath = lib.makeBinPath tools;
 in
 {
@@ -141,6 +149,7 @@ in
     pkgs.dockerTools.caCertificates
     dbusRun
     passwdDb
+    playwrightChromium
   ];
 
   config = {
@@ -149,6 +158,7 @@ in
       "LANG=C.UTF-8"
       "LC_ALL=C.UTF-8"
       "TERM=xterm-256color"
+      "PLAYWRIGHT_BROWSERS_PATH=/opt/playwright"
       "PYTHONUNBUFFERED=1"
       "PYTHONDONTWRITEBYTECODE=1"
       "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
