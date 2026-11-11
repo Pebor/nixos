@@ -45,6 +45,7 @@
       docker
       hermes
       hermes-native
+      hermes-postboot
       hermes-secrets-sync
       battery-guard
       power-profile
