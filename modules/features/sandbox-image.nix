@@ -121,6 +121,14 @@ let
     chmod +x $out/usr/local/bin/dbus-run-session
   '';
 
+  # dbus (and other tools) resolve the running uid via /etc/passwd; the image
+  # has none, which makes dbus-daemon die with "Memory allocation failure".
+  passwdDb = pkgs.runCommand "hermes-sandbox-passwd" { } ''
+    mkdir -p $out/etc
+    printf 'root:x:0:0:root:/root:/bin/sh\nhermes:x:1001:100:hermes:/root:/bin/sh\n' > $out/etc/passwd
+    printf 'root:x:0:\nusers:x:100:\n' > $out/etc/group
+  '';
+
   binPath = lib.makeBinPath tools;
 in
 {
@@ -132,6 +140,7 @@ in
     pkgs.dockerTools.usrBinEnv
     pkgs.dockerTools.caCertificates
     dbusRun
+    passwdDb
   ];
 
   config = {
