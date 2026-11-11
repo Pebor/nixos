@@ -162,6 +162,21 @@
     environment.systemPackages = with pkgs; [
       openssl
       bitwarden-cli   # bw: service-vault secrets (see the vaultwarden card)
+
+      # FHS sandbox for the Kotlin toolchain (ktc, used to build tasks-app).
+      # ktc downloads a JBR/Android SDK built for a normal distribution: their
+      # binaries need /lib64/ld-linux and /usr/lib, which NixOS does not have.
+      # Declared here (not built ad-hoc with nix-build) so it lives in the
+      # system profile and survives `nix-collect-garbage -d`.
+      (buildFHSEnv {
+        name = "ktc-fhs";
+        targetPkgs = p: with p; [
+          libXtst libX11 libXext libXi libXrender libXcursor libXrandr
+          libXinerama libxcb libxkbcommon glibc zlib libGL fontconfig freetype
+          dbus alsa-lib cups nss nspr expat libdrm mesa
+        ];
+        runScript = "bash";
+      })
     ];
   };
 
