@@ -23,7 +23,6 @@
         HOME = "/home/server";
         HERMES_HOME = "/var/lib/hermes";
         HERMES_DASHBOARD = "1";
-        PATH = "/run/current-system/sw/bin:/usr/local/bin:/usr/bin:/bin";
       };
       serviceConfig = {
         User = "server";
@@ -39,6 +38,12 @@
 
     # The dashboard is a separate process (the container's s6 started it too);
     # `gateway run` never binds it itself.
+    # Docker bridges may reach the dashboard port on the host: Caddy lives in a
+    # container and proxies ai.dash.pebor.me to host.docker.internal:9119.
+    networking.firewall.extraInputRules = ''
+      iifname { "docker0", "br-*" } tcp dport 9119 accept
+    '';
+
     systemd.services.hermes-dashboard = {
       description = "Hermes Agent dashboard (http://127.0.0.1:9119)";
       wantedBy = [ "multi-user.target" ];
@@ -46,13 +51,15 @@
       environment = {
         HOME = "/home/server";
         HERMES_HOME = "/var/lib/hermes";
-        PATH = "/run/current-system/sw/bin:/usr/local/bin:/usr/bin:/bin";
       };
       serviceConfig = {
         User = "server";
         Group = "users";
         Type = "exec";
-        ExecStart = "/var/lib/hermes-native/hermes-agent/.hermes/bin/hermes dashboard --host 127.0.0.1 --port 9119";
+        # 0.0.0.0 because the dashboard is proxied by the edge Caddy *container*
+        # (via host.docker.internal) — the firewall rule below keeps it off the
+        # LAN; Caddy's basic-auth gate is the perimeter, as before.
+        ExecStart = "/var/lib/hermes-native/hermes-agent/.hermes/bin/hermes dashboard --host 0.0.0.0 --port 9119";
         Restart = "always";
         RestartSec = 5;
       };
