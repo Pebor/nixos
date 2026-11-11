@@ -123,6 +123,7 @@ in
   # in the image, and Bot Desktop refuses to start without a bus.
   extraCommands = ''
     mkdir -p etc/dbus-1
+    chmod u+w etc etc/dbus-1
     cat > etc/dbus-1/session.conf <<'CONF'
     <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
       "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
