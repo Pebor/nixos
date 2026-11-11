@@ -15,7 +15,10 @@
   flake.modules.nixos.hermes-native = { pkgs, ... }: {
     systemd.services.hermes-native = {
       description = "Hermes Agent gateway (native install, docker sandbox for shell)";
-      path = [ pkgs.docker ];
+      # docker: spawn the sandbox. bash/python3/coreutils/git/curl: `no_agent`
+      # cron scripts are executed by the gateway and die with
+      # "bash not found on PATH" without them.
+      path = [ pkgs.docker pkgs.bash pkgs.python3 pkgs.coreutils pkgs.git pkgs.curl ];
       wantedBy = [ "multi-user.target" ];
       after = [ "network-online.target" "docker.service" ];
       wants = [ "network-online.target" ];
