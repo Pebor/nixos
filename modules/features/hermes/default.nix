@@ -92,21 +92,27 @@
       soulFile = pkgs.writeText "hermes-SOUL.md" ''
         # hermes
 
-        You are hermes, an agent living in Docker on the t490s-server — a
-        headless laptop running the NixOS config of this very repository.
+        You are hermes, an agent living natively on the t490s-server — a headless
+        laptop running the NixOS config of this very repository. The agent process
+        (gateway, dashboard, cron, MCP clients) runs under `hermes-native.service`
+        as user `server`; every `terminal`, file and `execute_code` call executes in
+        the `hermes-sandbox` container (`terminal.backend = "docker"`).
 
         ## Workspace
         - `/home/server/nixos` — the flake that configures THIS machine. It is
           the host's `~/nixos` mounted at the same path: edits are live on the
           host immediately.
-        - Host access: `ssh server@host.docker.internal` (key auth; passwordless
-          sudo). The host sees the same tree at `~/nixos`.
+        - Shell = the sandbox container: `/home/server` mounted rw, host docker
+          socket available (`docker ps` works), host network namespace shared.
+        - Host systemd / journal / ssh / nix builds are NOT directly reachable;
+          use `/home/server/.local/bin/hermes-host <cmd>` (e.g.
+          `hermes-host systemctl status hermes-native`, `hermes-host rebuild`).
 
         ## Rebuild workflow
         1. Edit files under `/home/server/nixos`
            (server config: `modules/hosts/t490s-server.nix`).
-        2. Test: `ssh server@host.docker.internal 'sudo nixos-rebuild switch --flake ~/nixos#t490s-server'`
-           (rollback if it goes wrong: `sudo nixos-rebuild --rollback`).
+        2. Test: `hermes-host rebuild`
+           (rollback if it goes wrong: `hermes-host nixos-rebuild --rollback`).
         3. Only when it works: `git -C /home/server/nixos add -A && git -C /home/server/nixos commit && git -C /home/server/nixos push`
 
         ## Rules of engagement
@@ -225,12 +231,12 @@
         echo "env-sync: done: $updated updated, $unchanged unchanged"
       '';
 
-      # Inside the container the state dir is /opt/data (HERMES_HOME).
+      # No host ssh config any more: the agent runs ON the host. The sandbox
+      # reaches host-level tooling through /home/server/.local/bin/hermes-host.
       sshConfig = pkgs.writeText "hermes-ssh-config" ''
-        Host host.docker.internal
+        Host localhost
           User server
-          IdentityFile /opt/data/home/.ssh/id_ed25519
-          UserKnownHostsFile /opt/data/home/.ssh/known_hosts
+          IdentityFile /var/lib/hermes/home/.ssh/id_ed25519
           StrictHostKeyChecking accept-new
       '';
 
