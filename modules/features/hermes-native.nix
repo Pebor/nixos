@@ -41,7 +41,8 @@
     # Docker bridges may reach the dashboard port on the host: Caddy lives in a
     # container and proxies ai.dash.pebor.me to host.docker.internal:9119.
     networking.firewall.extraInputRules = ''
-      iifname { "docker0", "br-*" } tcp dport 9119 accept
+      iifname "docker0" tcp dport 9119 accept
+      iifname "br-*" tcp dport 9119 accept
     '';
 
     systemd.services.hermes-dashboard = {
