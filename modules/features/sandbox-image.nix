@@ -113,24 +113,23 @@ in
   name = "hermes-sandbox";
   tag = "latest";
 
-  contents = tools ++ [
+  contents = tools ++ [ dbusConf
     pkgs.dockerTools.binSh
     pkgs.dockerTools.usrBinEnv
     pkgs.dockerTools.caCertificates
   ];
 
-  # dbus-run-session needs a session bus config; the nix dbus package has none
-  # in the image, and Bot Desktop refuses to start without a bus.
-  extraCommands = ''
-    mkdir -p etc/dbus-1
-    chmod u+w etc etc/dbus-1
-    cat > etc/dbus-1/session.conf <<'CONF'
+  # dbus-run-session needs a session bus config. It cannot be written by
+  # extraCommands (the image's /etc is read-only in the customisation layer),
+  # so it ships as a contents entry instead.
+  dbusConf = pkgs.runCommand "hermes-dbus-session-conf" { } ''
+    mkdir -p $out/etc/dbus-1
+    cat > $out/etc/dbus-1/session.conf <<'EOF'
     <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
       "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
     <busconfig>
       <type>session</type>
       <listen>unix:tmpdir=/tmp</listen>
-      <servicedir>/run/current-system/sw/share/dbus-1/services</servicedir>
       <policy context="default">
         <allow user="*"/>
         <allow own="*"/>
@@ -138,7 +137,7 @@ in
         <allow receive_type="*"/>
       </policy>
     </busconfig>
-    CONF
+    EOF
   '';
 
   config = {
