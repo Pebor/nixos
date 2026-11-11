@@ -106,25 +106,19 @@ let
     gnupg
   ];
 
-  # dbus-run-session needs a session bus config. It cannot be written by
-  # extraCommands (the image's /etc is read-only in the customisation layer),
-  # so it ships as a contents entry instead.
-  dbusConf = pkgs.runCommand "hermes-dbus-session-conf" { } ''
-    mkdir -p $out/etc/dbus-1
-    cat > $out/etc/dbus-1/session.conf <<'EOF'
-    <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
-      "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
-    <busconfig>
-      <type>session</type>
-      <listen>unix:tmpdir=/tmp</listen>
-      <policy context="default">
-        <allow user="*"/>
-        <allow own="*"/>
-        <allow send_type="*"/>
-        <allow receive_type="*"/>
-      </policy>
-    </busconfig>
+  # Bot Desktop starts its session bus with `dbus-run-session`, which reads
+  # /etc/dbus-1/session.conf — in the nix dbus package that file is a placeholder
+  # WITHOUT <listen>, so the bus refuses to start ("needs one or more <listen>").
+  # This wrapper points it at the package's real session.conf and sits first in
+  # PATH, so no /etc write is needed.
+  dbusRun = pkgs.runCommand "hermes-dbus-run-session" { } ''
+    mkdir -p $out/usr/local/bin
+    cat > $out/usr/local/bin/dbus-run-session <<'EOF'
+    #!/bin/sh
+    exec ${pkgs.dbus}/bin/dbus-run-session \
+      --config-file=${pkgs.dbus}/share/dbus-1/session.conf "$@"
     EOF
+    chmod +x $out/usr/local/bin/dbus-run-session
   '';
 
   binPath = lib.makeBinPath tools;
@@ -137,12 +131,12 @@ in
   contents = tools ++ [    pkgs.dockerTools.binSh
     pkgs.dockerTools.usrBinEnv
     pkgs.dockerTools.caCertificates
-    dbusConf   # LAST: the dbus package ships a placeholder /etc/dbus-1/session.conf that would win otherwise
+    dbusRun
   ];
 
   config = {
     Env = [
-      "PATH=${binPath}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      "PATH=/usr/local/bin:${binPath}:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
       "LANG=C.UTF-8"
       "LC_ALL=C.UTF-8"
       "TERM=xterm-256color"
