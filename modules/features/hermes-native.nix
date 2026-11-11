@@ -15,6 +15,7 @@
   flake.modules.nixos.hermes-native = { pkgs, ... }: {
     systemd.services.hermes-native = {
       description = "Hermes Agent gateway (native install, docker sandbox for shell)";
+      path = [ pkgs.docker ];
       wantedBy = [ "multi-user.target" ];
       after = [ "network-online.target" "docker.service" ];
       wants = [ "network-online.target" ];
