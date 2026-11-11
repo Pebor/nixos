@@ -91,6 +91,7 @@ let
     xfce4-panel
     xfdesktop
     xfconf
+    xfce4-settings
     dbus
     xorg.xauth
     xorg.xdpyinfo
