@@ -119,6 +119,27 @@ in
     pkgs.dockerTools.caCertificates
   ];
 
+  # dbus-run-session needs a session bus config; the nix dbus package has none
+  # in the image, and Bot Desktop refuses to start without a bus.
+  extraCommands = ''
+    mkdir -p etc/dbus-1
+    cat > etc/dbus-1/session.conf <<'CONF'
+    <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+      "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+    <busconfig>
+      <type>session</type>
+      <listen>unix:tmpdir=/tmp</listen>
+      <servicedir>/run/current-system/sw/share/dbus-1/services</servicedir>
+      <policy context="default">
+        <allow user="*"/>
+        <allow own="*"/>
+        <allow send_type="*"/>
+        <allow receive_type="*"/>
+      </policy>
+    </busconfig>
+    CONF
+  '';
+
   config = {
     Env = [
       "PATH=${binPath}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
