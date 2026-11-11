@@ -234,15 +234,21 @@
           StrictHostKeyChecking accept-new
       '';
 
+      # Native install (cutover 2026-11-11): the agent runs as a systemd unit on
+      # the host; shell/file/execute_code calls go into the hermes-sandbox image
+      # through `terminal.backend = "docker"`. The old docker-exec wrapper died
+      # with the container.
       hermes = pkgs.writeShellApplication {
         name = "hermes";
-        runtimeInputs = [ config.virtualisation.docker.package ];
+        runtimeInputs = [ pkgs.coreutils ];
         text = ''
-          if [ -t 0 ]; then
-            exec docker exec -it hermes hermes "$@"
-          else
-            exec docker exec -i hermes hermes "$@"
+          export HERMES_HOME="''${HERMES_HOME:-/var/lib/hermes}"
+          bin=/var/lib/hermes-native/hermes-agent/.hermes/bin/hermes
+          if [ ! -x "$bin" ]; then
+            echo "hermes: native install missing at $bin (run the installer)" >&2
+            exit 127
           fi
+          exec "$bin" "$@"
         '';
       };
 
@@ -250,96 +256,11 @@
     {
       virtualisation.oci-containers.backend = "docker";
 
-      virtualisation.oci-containers.containers.hermes = {
-        # DERIVED image, not upstream: `images/hermes/Dockerfile` = upstream + the
-        # patches in `images/hermes/patches/` baked in at build time. A runtime patch
-        # under /opt/hermes is duct tape — an image pull or a container re-create
-        # drops it silently. Built by hermes-image-build (below) before this unit
-        # starts; `--pull missing` in the pre-start then never replaces the local tag.
-        image = "hermes-agent:patched";
-        # NOT "gateway run": image >= 0.22 supervises the gateway itself —
-        # cont-init.d/02-reconcile-profiles auto-starts it as an s6 service
-        # (desired_state=running persists in ${stateDir}/gateway_state.json).
-        # A `gateway run` CMD then finds that gateway already running, exits 0,
-        # s6 takes the whole container down and systemd restarts it — the
-        # 2026-10-19 restart loop. The CMD only has to stay alive.
-        cmd = [ "sleep" "infinity" ];
-        # Localhost only: the sole way in is `tailscale serve` (tailnet) on
-        # :8444. Never publish this port publicly — tailnet + dashboard basic
-        # auth are the perimeter (see the NOTE in the hermes-seed check below).
-        ports = [ "127.0.0.1:9119:9119" ];
-        volumes = [
-          "${stateDir}:/opt/data"
-          "/home/server/nixos:/home/server/nixos"
-          # tasks-app lives on the host and must be writable from here so agents can
-          # use `hermes chat -w` (one git worktree per worker) instead of ssh'ing to
-          # the host — two agents in one checkout interleave commits and race builds.
-          # The container user is uid 1001, which is exactly host user `server`
-          # (owner of the tree), so no permission gymnastics are needed.
-          "/home/server/tasks-app:/home/server/tasks-app"
-        ];
-        environment = {
-          HERMES_DASHBOARD = "1";
-        };
-        # environmentFiles are read by the docker daemon ON THE HOST — every
-        # entry must be a host path. (An in-container path here makes docker
-        # refuse to start the container: "failed to load env file", and the
-        # hermes wrapper then fails every call with no visible error.)
-        environmentFiles = [
-          "/run/hermes/env"
-          "${stateDir}/.env"
-          "${stateDir}/secrets.env"
-        ];
-        extraOptions = [
-          "--memory=8g"
-          "--cpus=6"
-          "--add-host=host.docker.internal:host-gateway"
-          # The dashboard is also published as ai.dash.pebor.me by the edge
-          # Caddy, which proxies to http://hermes:9119 — name resolution needs
-          # this container on the same docker network. edge_proxy is created
-          # by ~/edge/compose.yaml as an external network, so it outlives the
-          # stack and must NOT be removed, or the container fails to start.
-          "--network=edge_proxy"
-          # Sibling containers on edge_proxy are reached by docker DNS name,
-          # never through Caddy: Vikunja (MCP + REST) lives at
-          # http://vikunja:3456/api — plain HTTP inside the docker network, no
-          # TLS/SNI, no /etc/hosts pin, survives re-creation and IP churn.
-          # The old `--add-host=tasks.pebor.me:100.103.136.50` pin was dropped
-          # 2026-10-25 (card #23): since b167872 put this container on
-          # edge_proxy the tailnet IP is dead from here, so the pin only
-          # shadowed the name with an unreachable address.
-        ];
-      };
-
-      # Derived image build. Ordering-only on purpose: if the build fails (upstream rewrite
-      # broke a patch anchor) the previous hermes-agent:patched image is still there and the
-      # container starts from it — never a refused container start. The build context is a
-      # store path, so editing a patch changes this unit's script and the next switch
-      # rebuilds the image.
-      #
-      # NO --pull: the base is whatever `nousresearch/hermes-agent:latest` is locally, so a
-      # rebuild never silently upgrades Hermes. Upgrading is an explicit two-step:
-      #   docker pull nousresearch/hermes-agent:latest && systemctl start hermes-image-build
-      systemd.services.hermes-image-build = {
-        description = "Build derived hermes-agent:patched image (upstream + our patches)";
-        after = [ "docker.service" ];
-        before = [ "docker-hermes.service" ];
-        wantedBy = [ "multi-user.target" ];
-        path = [ config.virtualisation.docker.package pkgs.coreutils ];
-        script = ''
-          docker build -t hermes-agent:patched ${../../../images/hermes}
-        '';
-        serviceConfig = {
-          Type = "oneshot";
-          TimeoutStartSec = "30min";
-          RemainAfterExit = true;
-        };
-      };
-
+      # RETIRED 2026-11-11: the oci-container ("docker-hermes") and its derived
+      # image are gone — Hermes now runs natively (systemd unit below) with the
+      # nix-built hermes-sandbox image as its shell backend. The block that used
+      # to live here is in git history if we ever need the rollback path.
       environment.systemPackages = [ hermes ];
-
-      # The generated unit is Restart=on-failure; a gateway is meant to be up.
-      systemd.services.docker-hermes.serviceConfig.Restart = lib.mkForce "always";
 
       # Requisite (not Requires) on the seed: still fail-closed at boot —
       # the container refuses to start while hermes-seed is inactive (its
@@ -347,8 +268,6 @@
       # cascades into stopping the running container. Requires= did exactly
       # that: every rebuild touching the seed script bounced the container
       # and killed the agent's live session.
-      systemd.services.docker-hermes.unitConfig.Requisite = [ "hermes-seed.service" ];
-
       # Two-file secrets model (declarative ownership, no chown in bash):
       #   secrets.env = user's keys, root-owned 440, never touched by tooling
       #   .env        = hermes tooling config, server-owned 600
@@ -361,7 +280,6 @@
 
       systemd.services.hermes-seed = {
         description = "Provision hermes state, config and host access";
-        before = [ "docker-hermes.service" ];
         # Started at boot on its own (NOT pulled in by docker-hermes' old
         # Requires= — see the Requisite note below).
         wantedBy = [ "multi-user.target" ];
