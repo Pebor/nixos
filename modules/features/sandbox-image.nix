@@ -134,10 +134,10 @@ in
   name = "hermes-sandbox";
   tag = "latest";
 
-  contents = tools ++ [ dbusConf
-    pkgs.dockerTools.binSh
+  contents = tools ++ [    pkgs.dockerTools.binSh
     pkgs.dockerTools.usrBinEnv
     pkgs.dockerTools.caCertificates
+    dbusConf   # LAST: the dbus package ships a placeholder /etc/dbus-1/session.conf that would win otherwise
   ];
 
   config = {
