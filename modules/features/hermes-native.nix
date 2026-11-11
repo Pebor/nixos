@@ -48,9 +48,15 @@
     # `extraInputRules` option does NOT exist (it is nftables-only and is
     # silently ignored) — so the rule goes in as an iptables command. Caddy
     # lives in a container and proxies ai.dash.pebor.me to the host's 9119.
+    # The edge containers (demo-bridge, inbox-push) talk to the gateway API on
+    # 8642 the same way — before the move they reached the `hermes` container by
+    # service name; there is no such container now, so they go through the
+    # docker gateway and need the port open from the bridge networks.
     networking.firewall.extraCommands = ''
       iptables -A nixos-fw -i br-+ -p tcp --dport 9119 -j nixos-fw-accept
       iptables -A nixos-fw -i docker0 -p tcp --dport 9119 -j nixos-fw-accept
+      iptables -A nixos-fw -i br-+ -p tcp --dport 8642 -j nixos-fw-accept
+      iptables -A nixos-fw -i docker0 -p tcp --dport 8642 -j nixos-fw-accept
     '';
 
     systemd.services.hermes-dashboard = {
