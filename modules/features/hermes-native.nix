@@ -40,11 +40,13 @@
     # `gateway run` never binds it itself.
     # Docker bridges may reach the dashboard port on the host: Caddy lives in a
     # container and proxies ai.dash.pebor.me to host.docker.internal:9119.
-    # iptables backend on this host (networking.nftables.enable = false), so the
-    # rule is written in iptables syntax — `+` is the interface wildcard.
-    networking.firewall.extraInputRules = ''
-      -i docker0 -p tcp --dport 9119 -j ACCEPT
-      -i br-+ -p tcp --dport 9119 -j ACCEPT
+    # The host runs the iptables firewall backend, where the declarative
+    # `extraInputRules` option does NOT exist (it is nftables-only and is
+    # silently ignored) — so the rule goes in as an iptables command. Caddy
+    # lives in a container and proxies ai.dash.pebor.me to the host's 9119.
+    networking.firewall.extraCommands = ''
+      iptables -A nixos-fw -i br-+ -p tcp --dport 9119 -j nixos-fw-accept
+      iptables -A nixos-fw -i docker0 -p tcp --dport 9119 -j nixos-fw-accept
     '';
 
     systemd.services.hermes-dashboard = {
