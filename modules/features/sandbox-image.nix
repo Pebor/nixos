@@ -106,21 +106,6 @@ let
     gnupg
   ];
 
-  # Bot Desktop starts its session bus with `dbus-run-session`, which reads
-  # /etc/dbus-1/session.conf — in the nix dbus package that file is a placeholder
-  # WITHOUT <listen>, so the bus refuses to start ("needs one or more <listen>").
-  # This wrapper points it at the package's real session.conf and sits first in
-  # PATH, so no /etc write is needed.
-  dbusRun = pkgs.runCommand "hermes-dbus-run-session" { } ''
-    mkdir -p $out/usr/local/bin
-    cat > $out/usr/local/bin/dbus-run-session <<'EOF'
-    #!/bin/sh
-    exec ${pkgs.dbus}/bin/dbus-run-session \
-      --config-file=${pkgs.dbus}/share/dbus-1/session.conf "$@"
-    EOF
-    chmod +x $out/usr/local/bin/dbus-run-session
-  '';
-
   # dbus (and other tools) resolve the running uid via /etc/passwd; the image
   # has none, which makes dbus-daemon die with "Memory allocation failure".
   passwdDb = pkgs.runCommand "hermes-sandbox-passwd" { } ''
@@ -147,10 +132,31 @@ in
   contents = tools ++ [    pkgs.dockerTools.binSh
     pkgs.dockerTools.usrBinEnv
     pkgs.dockerTools.caCertificates
-    dbusRun
     passwdDb
     playwrightChromium
   ];
+
+  # `contents` cannot win here: the dbus package is part of `tools`, and its own
+  # /etc/dbus-1/session.conf (a placeholder WITHOUT <listen>) is merged over any
+  # second copy. extraCommands run last, so they replace the file for real.
+  extraCommands = ''
+    rm -f etc/dbus-1/session.conf
+    mkdir -p etc/dbus-1
+    cat > etc/dbus-1/session.conf <<'EOF'
+    <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+      "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+    <busconfig>
+      <type>session</type>
+      <listen>unix:tmpdir=/tmp</listen>
+      <auth>EXTERNAL</auth>
+      <policy context="default">
+        <allow send_destination="*" eavesdrop="true"/>
+        <allow eavesdrop="true"/>
+        <allow own="*"/>
+      </policy>
+    </busconfig>
+    EOF
+  '';
 
   config = {
     Env = [
