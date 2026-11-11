@@ -84,6 +84,18 @@ let
     manim
     tex
 
+    # browser automation (browser_exec / Bot Desktop)
+    chromium
+    tigervnc
+    xfwm4
+    xfce4-panel
+    xfdesktop
+    xfconf
+    dbus
+    xorg.xauth
+    xorg.xdpyinfo
+    xorg.xprop
+
     # container management from inside the sandbox (socket is bind-mounted)
     docker-client
 
