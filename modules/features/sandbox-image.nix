@@ -106,19 +106,6 @@ let
     gnupg
   ];
 
-  binPath = lib.makeBinPath tools;
-in
-{
-  flake.packages.x86_64-linux.hermes-sandbox = pkgs.dockerTools.buildLayeredImage {
-  name = "hermes-sandbox";
-  tag = "latest";
-
-  contents = tools ++ [ dbusConf
-    pkgs.dockerTools.binSh
-    pkgs.dockerTools.usrBinEnv
-    pkgs.dockerTools.caCertificates
-  ];
-
   # dbus-run-session needs a session bus config. It cannot be written by
   # extraCommands (the image's /etc is read-only in the customisation layer),
   # so it ships as a contents entry instead.
@@ -139,6 +126,19 @@ in
     </busconfig>
     EOF
   '';
+
+  binPath = lib.makeBinPath tools;
+in
+{
+  flake.packages.x86_64-linux.hermes-sandbox = pkgs.dockerTools.buildLayeredImage {
+  name = "hermes-sandbox";
+  tag = "latest";
+
+  contents = tools ++ [ dbusConf
+    pkgs.dockerTools.binSh
+    pkgs.dockerTools.usrBinEnv
+    pkgs.dockerTools.caCertificates
+  ];
 
   config = {
     Env = [
