@@ -23,7 +23,7 @@
       # launcher calls `linux64` and `getconf`; without them the nightly web
       # build died with "linux64: command not found".
       path = [ pkgs.docker pkgs.bash pkgs.python3 pkgs.coreutils pkgs.git pkgs.curl
-               pkgs.openssh pkgs.rsync pkgs.util-linux pkgs.glibc.bin ];
+               pkgs.openssh pkgs.rsync pkgs.util-linux pkgs.glibc.bin pkgs.android-tools ];
       wantedBy = [ "multi-user.target" ];
       after = [ "network-online.target" "docker.service" ];
       wants = [ "network-online.target" ];

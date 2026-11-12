@@ -165,20 +165,14 @@
       openssl
       bitwarden-cli   # bw: service-vault secrets (see the vaultwarden card)
 
-      # FHS sandbox for the Kotlin toolchain (ktc, used to build tasks-app).
-      # ktc downloads a JBR/Android SDK built for a normal distribution: their
-      # binaries need /lib64/ld-linux and /usr/lib, which NixOS does not have.
-      # Declared here (not built ad-hoc with nix-build) so it lives in the
-      # system profile and survives `nix-collect-garbage -d`.
-      (buildFHSEnv {
-        name = "ktc-fhs";
-        targetPkgs = p: with p; [
-          libXtst libX11 libXext libXi libXrender libXcursor libXrandr
-          libXinerama libxcb libxkbcommon glibc zlib libGL fontconfig freetype
-          dbus alsa-lib cups nss nspr expat libdrm mesa
-        ];
-        runScript = "bash";
-      })
+      # Android toolchain, declaratively. adb used to come from a hand-downloaded
+      # SDK (~/Android/Sdk) and the Kotlin CLI ran inside a buildFHSEnv wrapper
+      # because prebuilt JBR/SDK binaries want /lib64/ld-linux. nix-ld already
+      # supplies those libraries — `kotlin build -m androidApp -p android` builds
+      # in the plain host shell — so the FHS sandbox was pure duct tape and is
+      # gone. The SDK components ktc downloads (~/Android/Sdk, 5 GB) are the
+      # toolchain's own cache, like ~/.gradle: not something to pin in nix.
+      android-tools
     ];
   };
 
