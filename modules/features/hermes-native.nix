@@ -78,6 +78,12 @@
       iptables -A nixos-fw -i docker0 -p tcp --dport 9119 -j nixos-fw-accept
       iptables -A nixos-fw -i br-+ -p tcp --dport 8642 -j nixos-fw-accept
       iptables -A nixos-fw -i docker0 -p tcp --dport 8642 -j nixos-fw-accept
+      # 8644 = the webhook port the tasks-api container posts card changes to.
+      # Without it the kanban wake never fired: a new card sat in Backlog and no
+      # agent session started (TASKS_HOOK_URL also still named the old `hermes`
+      # container, fixed in ~/tasks-api/.env).
+      iptables -A nixos-fw -i br-+ -p tcp --dport 8644 -j nixos-fw-accept
+      iptables -A nixos-fw -i docker0 -p tcp --dport 8644 -j nixos-fw-accept
     '';
 
     systemd.services.hermes-dashboard = {
