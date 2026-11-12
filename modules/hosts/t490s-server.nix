@@ -55,6 +55,7 @@
       cache-warm
       valheim-chat-watcher
       hermes-status
+      thought-sink
     ]);
 
     networking.hostName = "t490s";
