@@ -17,11 +17,13 @@
       description = "Hermes Agent gateway (native install, docker sandbox for shell)";
       # docker: spawn the sandbox. bash/python3/coreutils/git/curl: `no_agent`
       # cron scripts are executed by the gateway and die with
-      # "bash not found on PATH" without them. openssh: plugins (desktop-notify)
-      # openssh: plugins (desktop-notify) ssh to the T14 — in the container era
+      # "bash not found on PATH" without them. openssh: plugins (desktop-notify) ssh to the T14 — in the container era
       # ssh came from the image. rsync: the tasks-app web cron rsyncs the bundle
-      # into ~/tasks-web/site.
-      path = [ pkgs.docker pkgs.bash pkgs.python3 pkgs.coreutils pkgs.git pkgs.curl pkgs.openssh pkgs.rsync ];
+      # into ~/tasks-web/site. util-linux + glibc.bin: the Kotlin toolchain's
+      # launcher calls `linux64` and `getconf`; without them the nightly web
+      # build died with "linux64: command not found".
+      path = [ pkgs.docker pkgs.bash pkgs.python3 pkgs.coreutils pkgs.git pkgs.curl
+               pkgs.openssh pkgs.rsync pkgs.util-linux pkgs.glibc.bin ];
       wantedBy = [ "multi-user.target" ];
       after = [ "network-online.target" "docker.service" ];
       wants = [ "network-online.target" ];
