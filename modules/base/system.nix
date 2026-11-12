@@ -32,6 +32,11 @@
     # Always-available system tools (editor + nix helper).
     environment.systemPackages = with pkgs; [
       # neovim
+      # The browser tool the gateway drives runs on THIS host (not in the
+      # sandbox), so the browser has to exist here: /run/current-system/sw/bin/
+      # chromium is what /var/lib/hermes/config.yaml browser.executable_path
+      # points at.
+      chromium
       nh
       usbutils
       pciutils
