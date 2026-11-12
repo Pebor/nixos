@@ -41,6 +41,14 @@
         # default ($XDG_CONFIG_HOME/browser-harness/tmp = host /tmp) is invisible
         # there. /home/server is mounted rw in both, so both sides see the shot.
         BH_TMP_DIR = "/home/server/.cache/browser-harness/tmp";
+        # Run the sandbox as the host user (server 1001:100), not root. A root
+        # container writes root-owned files into the /home/server bind mount; those
+        # then break every build that runs as `server`, and "fixing" them with one
+        # `chown -R 1001:100 /home/server` (2026-11-12) also stole the data dirs of
+        # the compose stacks (filebrowser 33, vikunja 1000, fin 10002, radicale
+        # 2999) and took cloud/calendar/tasks down. docker.sock is root:docker 0660
+        # and `server` is in the docker group, so the sandbox keeps docker access.
+        TERMINAL_DOCKER_RUN_AS_HOST_USER = "true";
       };
       serviceConfig = {
         User = "server";
