@@ -17,8 +17,11 @@
       description = "Hermes Agent gateway (native install, docker sandbox for shell)";
       # docker: spawn the sandbox. bash/python3/coreutils/git/curl: `no_agent`
       # cron scripts are executed by the gateway and die with
-      # "bash not found on PATH" without them.
-      path = [ pkgs.docker pkgs.bash pkgs.python3 pkgs.coreutils pkgs.git pkgs.curl ];
+      # "bash not found on PATH" without them. openssh: plugins (desktop-notify)
+      # openssh: plugins (desktop-notify) ssh to the T14 — in the container era
+      # ssh came from the image. rsync: the tasks-app web cron rsyncs the bundle
+      # into ~/tasks-web/site.
+      path = [ pkgs.docker pkgs.bash pkgs.python3 pkgs.coreutils pkgs.git pkgs.curl pkgs.openssh pkgs.rsync ];
       wantedBy = [ "multi-user.target" ];
       after = [ "network-online.target" "docker.service" ];
       wants = [ "network-online.target" ];
@@ -27,6 +30,15 @@
         HOME = "/home/server";
         HERMES_HOME = "/var/lib/hermes";
         HERMES_DASHBOARD = "1";
+        # The bundled python-build-standalone has no compiled-in cafile and NixOS
+        # keeps no openssl-hashed /etc/ssl/certs, so HTTPS from cron scripts died
+        # with CERTIFICATE_VERIFY_FAILED (topic sweep deletes, fin tidy).
+        SSL_CERT_FILE = "/etc/ssl/certs/ca-certificates.crt";
+        # Browser screenshots must land where the sandbox can read them: file and
+        # vision tools resolve local paths INSIDE hermes-sandbox, and the harness
+        # default ($XDG_CONFIG_HOME/browser-harness/tmp = host /tmp) is invisible
+        # there. /home/server is mounted rw in both, so both sides see the shot.
+        BH_TMP_DIR = "/home/server/.cache/browser-harness/tmp";
       };
       serviceConfig = {
         User = "server";
@@ -39,6 +51,13 @@
         KillMode = "mixed";
       };
     };
+
+    # Chromium paints text only when the system has fonts. The headless server
+    # had exactly one (fc-list), so every browser_exec screenshot came back
+    # blank apart from CSS box backgrounds — half-painted pages, no glyphs.
+    fonts.enableDefaultPackages = true;
+    fonts.fontconfig.enable = true;
+    fonts.packages = with pkgs; [ dejavu_fonts liberation_ttf noto-fonts ];
 
     # The dashboard is a separate process (the container's s6 started it too);
     # `gateway run` never binds it itself.

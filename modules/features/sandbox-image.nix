@@ -114,6 +114,14 @@ let
     printf 'root:x:0:\nusers:x:100:\n' > $out/etc/group
   '';
 
+  # Chromium paints text only when fontconfig finds a config AND the fonts it
+  # names. The image shipped neither: screenshots showed page backgrounds and
+  # images but not one glyph (measured: every text run had zero height). The
+  # generated fonts.conf names absolute store paths, so the fonts must be part
+  # of `contents` too, not just referenced from the file.
+  sandboxFonts = with pkgs; [ dejavu_fonts liberation_ttf noto-fonts ];
+  sandboxFontsConf = pkgs.makeFontsConf { fontDirectories = sandboxFonts; };
+
   # Hermes' sandbox browser probe expects a Playwright layout
   # ($PLAYWRIGHT_BROWSERS_PATH/chromium-*/chrome-linux/chrome), so put the nix
   # chromium there instead of asking for a download.
@@ -129,7 +137,7 @@ in
   name = "hermes-sandbox";
   tag = "latest";
 
-  contents = tools ++ [    pkgs.dockerTools.binSh
+  contents = tools ++ sandboxFonts ++ [    pkgs.dockerTools.binSh
     pkgs.dockerTools.usrBinEnv
     pkgs.dockerTools.caCertificates
     passwdDb
@@ -156,6 +164,11 @@ in
       </policy>
     </busconfig>
     EOF
+
+    # fontconfig config for the sandbox chromium (see sandboxFontsConf). It is a
+    # single FILE, so it cannot go in `contents`; FONTCONFIG_FILE in Env points here.
+    mkdir -p etc/fonts
+    cp ${sandboxFontsConf} etc/fonts/fonts.conf
   '';
 
   config = {
@@ -168,6 +181,7 @@ in
       "PYTHONUNBUFFERED=1"
       "PYTHONDONTWRITEBYTECODE=1"
       "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+      "FONTCONFIG_FILE=/etc/fonts/fonts.conf"
     ];
     Cmd = [ "${pkgs.bashInteractive}/bin/bash" ];
     WorkingDir = "/home/server";
