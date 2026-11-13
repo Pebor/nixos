@@ -31,6 +31,44 @@
             pro: opencode-go/deepseek-v4-pro
             flash: opencode-go/deepseek-v4.1-flash
 
+        # The unit env (TERMINAL_DOCKER_*) is authoritative for the running
+        # service; this block keeps a fresh state dir reproducible.
+        terminal:
+          backend: docker
+          docker_image: hermes-sandbox:latest
+          docker_volumes:
+            - /home/server:/home/server
+            - /var/run/docker.sock:/var/run/docker.sock
+            - /nix:/nix
+            - /run/current-system:/run/current-system:ro
+            - /var/lib/hermes:/var/lib/hermes
+            - /var/lib/hermes/.env:/var/lib/hermes/.env:ro
+            - /var/lib/hermes/sandboxes/docker/masks/secrets.env:/var/lib/hermes/secrets.env:ro
+            - /var/lib/hermes/home/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro
+            - /var/lib/hermes/home/.ssh/id_ed25519.pub:/root/.ssh/id_ed25519.pub:ro
+          docker_extra_args:
+            - --network=host
+            - --group-add=131
+        browser:
+          executable_path: /run/current-system/sw/bin/chromium
+        mcp_servers:
+          vikunja:
+            url: https://tasks.pebor.me/api/v2/mcp
+            headers:
+              Authorization: Bearer ''${MCP_VIKUNJA_API_KEY}
+            enabled: true
+        streaming:
+          enabled: true
+          transport: auto
+          edit_interval: 1.5
+          buffer_threshold: 100000
+        timezone: Europe/Prague
+        stt:
+          local:
+            model: small
+        tts:
+          provider: piper
+
         # Default reasoning depth: high for chat (low proved too shallow for
         # infra work), max for anything delegated to subagents/coding agents.
         agent:
@@ -88,6 +126,14 @@
               status_indicator: true
               dm_topic_auto_transfer: true
               drop_pending_on_cold_boot: false
+
+        telegram:
+          allowed_chats: '-1004335302419'
+          group_allowed_chats: -1004335302419
+          require_mention: true
+          extra:
+            rich_messages: true
+            dm_topic_auto_transfer: true
       '';
 
       soulFile = pkgs.writeText "hermes-SOUL.md" ''
