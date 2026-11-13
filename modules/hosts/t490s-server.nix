@@ -54,6 +54,7 @@
       harmonia
       cache-warm
       valheim-chat-watcher
+      valheim-presence
       hermes-status
       thought-sink
     ]);
