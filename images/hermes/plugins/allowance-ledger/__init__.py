@@ -34,9 +34,16 @@ HOME = Path(os.getenv("HERMES_HOME") or os.path.expanduser("~/.hermes"))
 LEDGER = Path(os.getenv("ALLOWANCE_LEDGER") or HOME / "usage/allowance-ledger.jsonl")
 PRICES = Path(os.getenv("ALLOWANCE_PRICES") or HOME / "usage/prices.json")
 DEBUG = Path(os.getenv("ALLOWANCE_DEBUG") or HOME / "usage/allowance-payload-sample.json")
+# The footer line is worth printing only when the turn actually moved the allowance: a reply
+# that cost 0.003 % of the month does not need "+0.003 % · 2 calls · session 0.14 %" stamped
+# under it. Threshold in percent of the monthly limit, read from a JSON file so it can be
+# tuned without restarting the agent: {"footer_min_pct": 0.05}
+CONFIG = Path(os.getenv("ALLOWANCE_CONFIG") or HOME / "allowance-ledger.json")
+FOOTER_MIN_PCT_DEFAULT = 0.05
 _lock = threading.Lock()
 _sample_written = False
 _prices_cache: tuple[float, dict] = (0.0, {})
+_config_cache: tuple[float, dict] = (0.0, {})
 
 # per-process accounting (the ledger is the durable copy; these drive the footer and /cost)
 _turn_cost: dict[str, float] = {}
@@ -241,6 +248,36 @@ def _seed(sid: str) -> None:
     _session_pct[sid] = _session_pct.get(sid, 0.0) + pct
 
 
+def _footer_min_pct() -> float:
+    """Smallest turn (share of the monthly allowance) that still gets a footer line.
+
+    Read from ``$HERMES_HOME/allowance-ledger.json`` (``footer_min_pct``) on every call —
+    mtime-cached, so editing the file changes the behaviour immediately and an env var
+    (``ALLOWANCE_FOOTER_MIN_PCT``) can override it for one process.
+    """
+    global _config_cache
+    value = FOOTER_MIN_PCT_DEFAULT
+    try:
+        mtime = CONFIG.stat().st_mtime
+        if _config_cache[0] != mtime:
+            data = json.loads(CONFIG.read_text(encoding="utf-8")) or {}
+            _config_cache = (mtime, data if isinstance(data, dict) else {})
+        raw = _config_cache[1].get("footer_min_pct")
+        if raw is not None:
+            value = float(raw)
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    env = os.getenv("ALLOWANCE_FOOTER_MIN_PCT")
+    if env:
+        try:
+            value = float(env)
+        except ValueError:
+            pass
+    return max(0.0, value)
+
+
 def _money(value: float, places: int = 4) -> str:
     return f"{value:.{places}f}"
 
@@ -360,10 +397,16 @@ def _on_transform_llm_output(response_text=None, session_id="", platform="", **k
             return None
         if platform and platform not in ("telegram", "api_server", "cli", "tui", "desktop"):
             return None
+        # A cheap turn prints no footer at all — but a footer left by a previous (double)
+        # registration is still stripped, so the reply never keeps a stale one.
+        stripped = _strip_footer(text)
+        turn, _calls = _turn_counters(sid)
+        if _quota_pct(turn, _turn_model.get(sid, "")) <= _footer_min_pct():
+            return stripped
         line = _session_label(sid)
         if not line:
-            return None
-        return f"{_strip_footer(text)}\n\n{line}"
+            return stripped
+        return f"{stripped}\n\n{line}"
     except Exception:
         return None
 

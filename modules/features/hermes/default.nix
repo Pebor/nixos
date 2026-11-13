@@ -18,9 +18,8 @@
     { config, pkgs, lib, ... }:
     let
       stateDir = "/var/lib/hermes";
-      hermesAgent = (inputs.hermesAgentSrc.packages.${pkgs.stdenv.hostPlatform.system}.default.override {
-        version = "0.23.1";
-      });
+      # One pin for the service, the dashboard and the CLI wrapper: see lib/hermes-pin.nix
+      hermesAgent = import ../../../lib/hermes-pin.nix { inherit inputs pkgs; };
 
       # Seeded to ${stateDir}/config.yaml if missing; afterwards hermes owns
       # the file (edit via `hermes config set` or the dashboard).

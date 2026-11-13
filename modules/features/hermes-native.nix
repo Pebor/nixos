@@ -13,9 +13,8 @@
 {
   flake.modules.nixos.hermes-native = { pkgs, ... }:
     let
-      hermesAgent = (inputs.hermesAgentSrc.packages.${pkgs.stdenv.hostPlatform.system}.default.override {
-        version = "0.23.1";
-      });
+      # One pin for the service, the dashboard and the CLI wrapper: see lib/hermes-pin.nix
+      hermesAgent = import ../../lib/hermes-pin.nix { inherit inputs pkgs; };
       # Host-side helper used from inside the sandbox. Nix-managed now: the old
       # ~/.local/bin copy was load-bearing but had no diff and no rollback.
       hermesHost = pkgs.writeShellScript "hermes-host" ''
