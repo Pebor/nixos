@@ -131,6 +131,12 @@
       after = [ "hermes-seed.service" ];
       before = [ "hermes-native.service" ];
       path = [ pkgs.rsync pkgs.coreutils ];
+      # `Switch` must re-copy the files, or a change in images/hermes/plugins is invisible: a
+      # oneshot with RemainAfterExit stays "active" across `nixos-rebuild switch`, so on
+      # 2026-11-14 the agent was restarted onto the OLD allowance-ledger 1.2.0 while the repo
+      # already had 1.3.0. restartTriggers makes any edit under images/hermes/plugins restart
+      # this unit on the next switch.
+      restartTriggers = [ ../../images/hermes/plugins ];
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
