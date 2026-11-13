@@ -12,7 +12,31 @@
 # owns the service definition.
 { pkgs, ... }:
 {
-  flake.modules.nixos.hermes-native = { pkgs, ... }: {
+  flake.modules.nixos.hermes-native = { pkgs, ... }:
+    let
+      # Host-side helper used from inside the sandbox. Nix-managed now: the old
+      # ~/.local/bin copy was load-bearing but had no diff and no rollback.
+      hermesHost = pkgs.writeShellScript "hermes-host" ''
+        #!/bin/sh
+        exec docker run --rm --pid=host --net=host \
+          -v /:/host -v /run:/run -v /nix:/nix:ro -e HOME=/root \
+          hermes-sandbox:latest /bin/sh -c '
+            export PATH=/host/run/current-system/sw/bin:/host/usr/bin:/usr/bin:/bin
+            cd /host
+            if [ "$1" = rebuild ]; then
+              exec ssh -i /host/var/lib/hermes/home/.ssh/id_ed25519 \
+                -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o BatchMode=yes \
+                server@127.0.0.1 \
+                "cd /home/server/nixos && sudo -n nixos-rebuild switch --flake .#t490s-server"
+            fi
+            exec "$@"
+          ' -- "$@"
+      '';
+    in {
+    systemd.tmpfiles.rules = [
+      "L+ /home/server/.local/bin/hermes-host - - - - ${hermesHost}"
+    ];
+
     systemd.services.hermes-native = {
       description = "Hermes Agent gateway (native install, docker sandbox for shell)";
       # docker: spawn the sandbox. bash/python3/coreutils/git/curl: `no_agent`
@@ -26,7 +50,7 @@
                pkgs.openssh pkgs.rsync pkgs.util-linux pkgs.glibc.bin pkgs.android-tools ];
       wantedBy = [ "multi-user.target" ];
       after = [ "network-online.target" "docker.service" ];
-      wants = [ "network-online.target" ];
+      wants = [ "network-online.target" "hermes-plugins-deploy.service" ];
       requires = [ "docker.service" ];
       environment = {
         HOME = "/home/server";
@@ -49,6 +73,24 @@
         # 2999) and took cloud/calendar/tasks down. docker.sock is root:docker 0660
         # and `server` is in the docker group, so the sandbox keeps docker access.
         TERMINAL_DOCKER_RUN_AS_HOST_USER = "true";
+        # The sandbox sees the state dir at the same path as the host. Reads are
+        # needed by finance/dayplan/nextcloud-sp/gh skills; writes by the ledger,
+        # adhd/done.log, uploads, deliverables and demos. `.env` stays readable
+        # (scripts source it) but read-only; secrets.env is masked (440 root:users
+        # would otherwise be readable by uid 1001 through group users).
+        TERMINAL_DOCKER_VOLUMES = builtins.toJSON [
+          "/home/server:/home/server"
+          "/var/run/docker.sock:/var/run/docker.sock"
+          "/nix:/nix"
+          "/run/current-system:/run/current-system:ro"
+          "/var/lib/hermes:/var/lib/hermes"
+          "/var/lib/hermes/.env:/var/lib/hermes/.env:ro"
+          "/var/lib/hermes/sandboxes/docker/masks/secrets.env:/var/lib/hermes/secrets.env:ro"
+          "/var/lib/hermes/home/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro"
+          "/var/lib/hermes/home/.ssh/id_ed25519.pub:/root/.ssh/id_ed25519.pub:ro"
+        ];
+        TERMINAL_DOCKER_EXTRA_ARGS = builtins.toJSON [ "--network=host" "--group-add=131" ];
+        TERMINAL_DOCKER_ENV = builtins.toJSON { HERMES_HOME = "/var/lib/hermes"; };
       };
       serviceConfig = {
         User = "server";
@@ -93,6 +135,25 @@
       iptables -A nixos-fw -i br-+ -p tcp --dport 8644 -j nixos-fw-accept
       iptables -A nixos-fw -i docker0 -p tcp --dport 8644 -j nixos-fw-accept
     '';
+
+    systemd.services.hermes-plugins-deploy = {
+      description = "Deploy Hermes plugins from the flake repo into HERMES_HOME";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "hermes-seed.service" ];
+      before = [ "hermes-native.service" ];
+      path = [ pkgs.rsync pkgs.coreutils ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        User = "server";
+        Group = "users";
+      };
+      script = ''
+        install -d -m 0755 /var/lib/hermes/plugins
+        rsync -a --delete --exclude '__pycache__' \
+          /home/server/nixos/images/hermes/plugins/ /var/lib/hermes/plugins/
+      '';
+    };
 
     systemd.services.hermes-dashboard = {
       description = "Hermes Agent dashboard (http://127.0.0.1:9119)";
