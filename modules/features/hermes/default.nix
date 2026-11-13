@@ -18,6 +18,9 @@
     { config, pkgs, lib, ... }:
     let
       stateDir = "/var/lib/hermes";
+      hermesAgent = (inputs.hermesAgentSrc.packages.${pkgs.stdenv.hostPlatform.system}.default.override {
+        version = "0.23.1";
+      });
 
       # Seeded to ${stateDir}/config.yaml if missing; afterwards hermes owns
       # the file (edit via `hermes config set` or the dashboard).
@@ -31,8 +34,9 @@
             pro: opencode-go/deepseek-v4-pro
             flash: opencode-go/deepseek-v4.1-flash
 
-        # The unit env (TERMINAL_DOCKER_*) is authoritative for the running
-        # service; this block keeps a fresh state dir reproducible.
+        # config.yaml is the single source of truth for the terminal contract;
+        # never duplicate TERMINAL_DOCKER_* in the unit env (terminal_tool
+        # applies config.yaml with override=True, so the unit env loses).
         terminal:
           backend: docker
           docker_image: hermes-sandbox:latest
@@ -70,7 +74,7 @@
           local:
             model: small
         tts:
-          provider: piper
+          provider: edge
 
         # Default reasoning depth: high for chat (low proved too shallow for
         # infra work), max for anything delegated to subagents/coding agents.
@@ -299,9 +303,9 @@
         runtimeInputs = [ pkgs.coreutils ];
         text = ''
           export HERMES_HOME="''${HERMES_HOME:-/var/lib/hermes}"
-          bin=/var/lib/hermes-native/hermes-agent/.hermes/bin/hermes
+          bin=${hermesAgent}/bin/hermes
           if [ ! -x "$bin" ]; then
-            echo "hermes: native install missing at $bin (run the installer)" >&2
+            echo "hermes: package binary missing at $bin" >&2
             exit 127
           fi
           exec "$bin" "$@"

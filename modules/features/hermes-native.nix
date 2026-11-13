@@ -6,14 +6,16 @@
 # which is disposable while the state dir is not.
 #
 # Why not the upstream NixOS module: it owns config.yaml (blocking
-# `hermes config set` and dashboard edits) and seals the Python env, so
-# `hermes pm install --extra` (piper TTS, whisper) cannot work. Here the
-# install is the official git/uv one at /var/lib/hermes-native and Nix only
-# owns the service definition.
-{ pkgs, ... }:
+# `hermes config set` and dashboard edits). Here the binary is pinned from the
+# upstream flake at v0.23.1; Nix owns the service definition, config stays
+# mutable in /var/lib/hermes.
+{ inputs, pkgs, ... }:
 {
   flake.modules.nixos.hermes-native = { pkgs, ... }:
     let
+      hermesAgent = (inputs.hermesAgentSrc.packages.${pkgs.stdenv.hostPlatform.system}.default.override {
+        version = "0.23.1";
+      });
       # Host-side helper used from inside the sandbox. Nix-managed now: the old
       # ~/.local/bin copy was load-bearing but had no diff and no rollback.
       hermesHost = pkgs.writeShellScript "hermes-host" ''
@@ -79,7 +81,7 @@
         User = "server";
         Group = "users";
         Type = "exec";
-        ExecStart = "/var/lib/hermes-native/hermes-agent/.hermes/bin/hermes gateway run";
+        ExecStart = "${hermesAgent}/bin/hermes gateway run";
         Restart = "always";
         RestartSec = 5;
         TimeoutStopSec = 30;
@@ -153,7 +155,7 @@
         # 0.0.0.0 because the dashboard is proxied by the edge Caddy *container*
         # (via host.docker.internal) — the firewall rule below keeps it off the
         # LAN; Caddy's basic-auth gate is the perimeter, as before.
-        ExecStart = "/var/lib/hermes-native/hermes-agent/.hermes/bin/hermes dashboard --host 0.0.0.0 --port 9119";
+        ExecStart = "${hermesAgent}/bin/hermes dashboard --host 0.0.0.0 --port 9119";
         Restart = "always";
         RestartSec = 5;
       };
