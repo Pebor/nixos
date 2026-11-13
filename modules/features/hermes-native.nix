@@ -37,6 +37,11 @@
     in {
     systemd.tmpfiles.rules = [
       "L+ /home/server/.local/bin/hermes-host - - - - ${hermesHost}"
+      # Short-lived screenshots and scratch; long-lived images go to
+      # /home/server/files/Documents/screenshots/ (filebrowser/cloud).
+      "d /home/server/tmp 0755 server users 7d"
+      "d /home/server/tmp/screenshots 0755 server users 7d"
+      "d /home/server/tmp/scratch 0755 server users 7d"
     ];
 
     systemd.services.hermes-native = {
