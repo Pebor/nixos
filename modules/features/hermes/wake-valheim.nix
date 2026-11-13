@@ -40,7 +40,7 @@
         Odpověz mu do herního chatu. RCON heslo najdeš na VPS v souboru
         /home/pebor/valheim/config/bepinex/config/org.tristan.rcon.cfg (řádek Password = ...),
         přes ssh -p 1234 pebor@178.104.163.147. Pak:
-        VALHEIM_RCON_HOST=100.117.69.56 VALHEIM_RCON_PASS=<heslo> /opt/data/bin/valheim_rcon.py "say <odpověď>"
+        VALHEIM_RCON_HOST=100.117.69.56 VALHEIM_RCON_PASS=<heslo> /var/lib/hermes/bin/valheim_rcon.py "say <odpověď>"
 
         Pravidla: česky, maximálně 2 krátké věty (herní chat). Svět neměň (nedávej
         itemy, neteleportuj, nespouštěj eventy), pokud o to hráč výslovně nepožádá.
@@ -60,7 +60,7 @@
           prompt=$(build_prompt "$who" "$text")
           log "waking agent for $who: $text"
           # lane session (valheim) — při přetečení nejdřív handoff do memory, pak rotace
-          handoff=$(docker exec hermes /usr/local/bin/python3 /opt/data/scripts/lane-session.py --handoff-if-full valheim 250 2>/dev/null || true)
+          handoff=$(python3 /var/lib/hermes/scripts/lane-session.py --handoff-if-full valheim 250 2>/dev/null || true)
           if [ -n "$handoff" ]; then
             prompt="$prompt
 
@@ -70,7 +70,7 @@ $handoff"
           timeout 300 "$HERMES" chat -q "$prompt" -c valheim --create-if-missing >>"$AGENT_LOG" 2>&1
           rc=$?
           if [ -n "$handoff" ]; then
-            docker exec hermes /usr/local/bin/python3 /opt/data/scripts/lane-session.py --rotate valheim >/dev/null 2>&1 || true
+            python3 /var/lib/hermes/scripts/lane-session.py --rotate valheim >/dev/null 2>&1 || true
           fi
           log "agent finished for $who (rc=$rc)"
         }
@@ -113,7 +113,7 @@ $handoff"
         after = [ "docker.service" "network-online.target" ];
         requires = [ "docker.service" ];
         wants = [ "network-online.target" ];
-        path = with pkgs; [ docker coreutils bash openssh ];
+        path = with pkgs; [ docker coreutils bash openssh python3 ];
         serviceConfig = {
           ExecStart = "${watcher}";
           Restart = "always";

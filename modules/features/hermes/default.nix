@@ -64,9 +64,10 @@
           deny:
             - "git push*--force*"
 
-        # Our plugins ship INSIDE the derived image (images/hermes/plugins/, card
-        # #52): git is the source of truth, the state volume holds only state. A
-        # fresh volume therefore needs just this list to reproduce the setup.
+        # Our plugins live in $HERMES_HOME/plugins (state dir), deployed from
+        # images/hermes/plugins/ — git is the source of truth, the state volume
+        # holds the running copy. A fresh volume needs this list plus the deploy
+        # step (see the hermes-native-ops skill, references/plugin-ops.md).
         plugins:
           enabled:
             - allowance-ledger

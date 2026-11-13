@@ -39,8 +39,9 @@ def _run(cmd: list[str], timeout: float = 30) -> str:
 
 
 def allowance() -> dict:
-    # the report lives in the container, where its paths and keys are
-    raw = _run(["docker", "exec", "hermes", "python3", "/opt/data/scripts/allowance-report.py", "--json"], 60)
+    # The report runs on the host now (the container is gone): its paths and keys
+    # hang off HERMES_DATA, the same state dir this service reads.
+    raw = _run(["python3", f"{DATA}/scripts/allowance-report.py", "--json"], 60)
     try:
         return json.loads(raw)
     except Exception:

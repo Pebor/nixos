@@ -8,7 +8,7 @@
       wantedBy = [ "multi-user.target" ];
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
-      path = [ pkgs.python3 pkgs.docker-client ];
+      path = [ pkgs.python3 ];
       environment = {
         HERMES_DATA = "/var/lib/hermes";
         HERMES_STATUS_BIND = "100.103.136.50";
@@ -20,7 +20,6 @@
         RestartSec = 3;
         User = "server";
         Group = "users";
-        SupplementaryGroups = [ "docker" ];
       };
     };
 
