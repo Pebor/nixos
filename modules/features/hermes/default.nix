@@ -49,6 +49,9 @@
           docker_extra_args:
             - --network=host
             - --group-add=131
+          docker_env:
+            HERMES_HOME: /var/lib/hermes
+          docker_run_as_host_user: true
         browser:
           executable_path: /run/current-system/sw/bin/chromium
         mcp_servers:

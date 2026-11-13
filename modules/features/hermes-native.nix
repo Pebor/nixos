@@ -65,32 +65,15 @@
         # default ($XDG_CONFIG_HOME/browser-harness/tmp = host /tmp) is invisible
         # there. /home/server is mounted rw in both, so both sides see the shot.
         BH_TMP_DIR = "/home/server/.cache/browser-harness/tmp";
-        # Run the sandbox as the host user (server 1001:100), not root. A root
-        # container writes root-owned files into the /home/server bind mount; those
-        # then break every build that runs as `server`, and "fixing" them with one
-        # `chown -R 1001:100 /home/server` (2026-11-12) also stole the data dirs of
-        # the compose stacks (filebrowser 33, vikunja 1000, fin 10002, radicale
-        # 2999) and took cloud/calendar/tasks down. docker.sock is root:docker 0660
-        # and `server` is in the docker group, so the sandbox keeps docker access.
-        TERMINAL_DOCKER_RUN_AS_HOST_USER = "true";
-        # The sandbox sees the state dir at the same path as the host. Reads are
-        # needed by finance/dayplan/nextcloud-sp/gh skills; writes by the ledger,
-        # adhd/done.log, uploads, deliverables and demos. `.env` stays readable
-        # (scripts source it) but read-only; secrets.env is masked (440 root:users
-        # would otherwise be readable by uid 1001 through group users).
-        TERMINAL_DOCKER_VOLUMES = builtins.toJSON [
-          "/home/server:/home/server"
-          "/var/run/docker.sock:/var/run/docker.sock"
-          "/nix:/nix"
-          "/run/current-system:/run/current-system:ro"
-          "/var/lib/hermes:/var/lib/hermes"
-          "/var/lib/hermes/.env:/var/lib/hermes/.env:ro"
-          "/var/lib/hermes/sandboxes/docker/masks/secrets.env:/var/lib/hermes/secrets.env:ro"
-          "/var/lib/hermes/home/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro"
-          "/var/lib/hermes/home/.ssh/id_ed25519.pub:/root/.ssh/id_ed25519.pub:ro"
-        ];
-        TERMINAL_DOCKER_EXTRA_ARGS = builtins.toJSON [ "--network=host" "--group-add=131" ];
-        TERMINAL_DOCKER_ENV = builtins.toJSON { HERMES_HOME = "/var/lib/hermes"; };
+        # Terminal/sandbox topology lives in config.yaml's `terminal:` block,
+        # seeded by modules/features/hermes/default.nix. Do NOT duplicate it as
+        # TERMINAL_DOCKER_* here: terminal_tool calls
+        # apply_terminal_config_to_env(override=True) whenever config.yaml has a
+        # terminal section, so the unit env is silently overwritten. That is how
+        # the first activation looked green while the sandbox still ran as root.
+        #
+        # Contract in config.yaml: uid 1001, /var/lib/hermes rw, .env ro,
+        # secrets.env masked, SSH key ro, --network=host, --group-add=131.
       };
       serviceConfig = {
         User = "server";
