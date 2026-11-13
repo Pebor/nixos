@@ -32,8 +32,12 @@ from typing import Any
 
 log = logging.getLogger("plugin.desktop-notify")
 
-BASE = Path(os.getenv("DESKTOP_NOTIFY_DIR", "/opt/data/var/desktop-notify"))
-CONFIG = Path(os.getenv("DESKTOP_NOTIFY_CONFIG", "/opt/data/desktop-notify.json"))
+# Paths hang off HERMES_HOME (set by the systemd unit). Hardcoding the retired
+# /opt/data pointed every state file at a directory that no longer exists after
+# the native cutover: the plugin kept running and silently wrote nothing.
+HOME = Path(os.getenv("HERMES_HOME") or os.path.expanduser("~/.hermes"))
+BASE = Path(os.getenv("DESKTOP_NOTIFY_DIR") or HOME / "var/desktop-notify")
+CONFIG = Path(os.getenv("DESKTOP_NOTIFY_CONFIG") or HOME / "desktop-notify.json")
 ATTEMPTS = BASE / "attempts.log"
 
 DEFAULTS: dict[str, Any] = {
@@ -52,8 +56,10 @@ DEFAULTS: dict[str, Any] = {
     "max_body_chars": 180,
     # skip turns whose reply is only whitespace or a bare status word
     "skip_if_shorter_than": 4,
-    # ssh chain: container -> t490s host -> T14 session
-    "host_jump": "server@host.docker.internal",
+    # Empty = one hop straight to the T14: the gateway runs natively on the
+    # t490s now. A jump host is only for the old container layout (there the
+    # process could not reach the T14 directly).
+    "host_jump": "",
     "desktop_host": "pebor@100.86.253.100",
     "connect_timeout": 5,
 }
@@ -120,7 +126,7 @@ def _cron_delivery_platform() -> str:
     The scheduler sets ``HERMES_CRON_SESSION=1`` plus the job's resolved target
     before the turn starts (``_reload_dotenv_and_publish_delivery_target``), so an
     empty value inside a cron run means ``deliver: local`` -- the answer only ever
-    lands in /opt/data/cron/output.
+    lands in $HERMES_HOME/cron/output.
     """
     try:
         from gateway.session_context import get_session_env
@@ -172,7 +178,10 @@ def _inner_command(cfg: dict[str, Any], title: str, body: str) -> str:
 
 
 def _host_script(cfg: dict[str, Any], inner: str) -> str:
-    """What the t490s runs: one ssh into the T14, command on stdin."""
+    """What a jump host runs: one ssh into the T14, command on stdin.
+
+    Only used when ``host_jump`` is set (the retired container layout).
+    """
     return (
         "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "
         "-o ConnectTimeout={timeout} {desktop} bash -s <<'EOSSH'\n{inner}\nEOSSH\n"
@@ -226,11 +235,15 @@ def _note(line: str) -> None:
 def _deliver(cfg: dict[str, Any], title: str, body: str) -> bool:
     """Push one notification; True when the T14 accepted it."""
     inner = _inner_command(cfg, title, body)
-    script = _host_script(cfg, inner)
+    jump = str(cfg.get("host_jump") or "").strip()
+    # No jump host = the ssh to the T14 carries the notify-send script itself.
+    target = jump or str(cfg["desktop_host"])
+    script = _host_script(cfg, inner) if jump else inner
     try:
         proc = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=%d" % int(cfg["connect_timeout"]),
-             str(cfg["host_jump"]), "bash -s"],
+            ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
+             "-o", "ConnectTimeout=%d" % int(cfg["connect_timeout"]),
+             target, "bash -s"],
             input=script, text=True, capture_output=True,
             timeout=int(cfg["connect_timeout"]) * 3 + 6,
         )

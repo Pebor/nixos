@@ -29,7 +29,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-HOME = Path(os.getenv("HERMES_HOME", "/opt/data"))
+HOME = Path(os.getenv("HERMES_HOME", "/var/lib/hermes"))
 STATE_DB = Path(os.getenv("TOPIC_CLEANER_DB", str(HOME / "state.db")))
 CONFIG = Path(os.getenv("TOPIC_CLEANER_CONFIG", str(HOME / "topic-cleaner.json")))
 ENV_FILE = HOME / ".env"

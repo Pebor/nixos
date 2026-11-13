@@ -8,7 +8,7 @@ core). This plugin therefore does two things:
 
 1. logs one JSONL line per API call with the token buckets + the peak/off-peak flag,
    and computes ``allowance_est`` from the published Go price table
-   (``/opt/data/usage/prices.json``) — the same arithmetic the provider uses, with
+   (``$HERMES_HOME/usage/prices.json``) — the same arithmetic the provider uses, with
    ``counted_factor`` 0.75 measured against real ``usage.opencode.allowance`` values;
 2. injects a one-line notice into the turn while a DeepSeek peak window is open
    (01:00-04:00 / 06:00-10:00 UTC, Mon-Fri = 2x price).
@@ -26,9 +26,14 @@ import time
 from pathlib import Path
 from typing import Any
 
-LEDGER = Path(os.getenv("ALLOWANCE_LEDGER", "/opt/data/usage/allowance-ledger.jsonl"))
-PRICES = Path(os.getenv("ALLOWANCE_PRICES", "/opt/data/usage/prices.json"))
-DEBUG = Path(os.getenv("ALLOWANCE_DEBUG", "/opt/data/usage/allowance-payload-sample.json"))
+# Paths hang off HERMES_HOME (set by the systemd unit). Hardcoding a home dir
+# is what silently killed this plugin's footer after the native migration: the
+# ledger pointed at the retired /opt/data, prices.json was never found, every
+# estimate came out 0 and the footer line went empty.
+HOME = Path(os.getenv("HERMES_HOME") or os.path.expanduser("~/.hermes"))
+LEDGER = Path(os.getenv("ALLOWANCE_LEDGER") or HOME / "usage/allowance-ledger.jsonl")
+PRICES = Path(os.getenv("ALLOWANCE_PRICES") or HOME / "usage/prices.json")
+DEBUG = Path(os.getenv("ALLOWANCE_DEBUG") or HOME / "usage/allowance-payload-sample.json")
 _lock = threading.Lock()
 _sample_written = False
 _prices_cache: tuple[float, dict] = (0.0, {})
@@ -415,7 +420,7 @@ def _provider_usage() -> dict:
         import urllib.request
         key = os.environ.get("OPENCODE_GO_API_KEY", "").strip()
         if not key:
-            env = Path("/opt/data/.env")
+            env = HOME / ".env"
             for line in env.read_text(encoding="utf-8").splitlines():
                 if line.startswith("OPENCODE_GO_API_KEY="):
                     key = line.split("=", 1)[1].strip()

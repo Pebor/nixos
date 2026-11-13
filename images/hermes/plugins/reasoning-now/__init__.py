@@ -36,7 +36,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-HOME = Path(os.getenv("HERMES_HOME", "/opt/data"))
+HOME = Path(os.getenv("HERMES_HOME", "/var/lib/hermes"))
 ENV_FILE = HOME / ".env"
 
 # `/rnow <level> [rest]` — and the slash-free `rnow <level> [rest]`, which is the one to
