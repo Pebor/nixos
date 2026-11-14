@@ -38,6 +38,7 @@
       niri
       greetd
       stylix
+      bootvine
 
       gaming
       desktop

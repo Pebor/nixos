@@ -42,6 +42,7 @@
       zram
       nix-ld
 
+      bootvine
       docker
       hermes
       hermes-native

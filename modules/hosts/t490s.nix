@@ -35,7 +35,7 @@
       gaming
       desktop
       laptop
-      plymouth
+      bootvine
       tailscale
       nix-ld
       oomd    ]);

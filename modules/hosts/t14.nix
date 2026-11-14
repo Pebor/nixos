@@ -44,7 +44,7 @@
       gaming
       desktop
       # laptop #trying something different rn
-      plymouth
+      bootvine
       tailscale
       build-client
       nix-ld
