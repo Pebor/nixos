@@ -145,6 +145,34 @@
 
     services.fprintd.enable = true;
 
+    # The reader is a USB device (Synaptics Prometheus, 06cb:00bd) and both TLP
+    # and powertop --auto-tune put it into USB autosuspend (2 s). libfprint then
+    # has to wake it on every scan: the first press after idle fails or times
+    # out and PAM silently falls back to a password, which reads as "the sensor
+    # doesn't recognise me". Keep it powered instead:
+    #   - udev rule (see the udev block below) for initial + re-enumeration
+    #   - TLP denylist so TLP stops autosuspending it
+    #   - oneshot that re-asserts it after powertop has run at boot
+    services.tlp.settings.USB_DENYLIST = "06cb:00bd";
+
+    systemd.services.fingerprint-usb-power = {
+      description = "Keep the Synaptics fingerprint reader out of USB autosuspend";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "powertop.service" "tlp.service" ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+      };
+      script = ''
+        for dev in /sys/bus/usb/devices/*; do
+          [ -f "$dev/idVendor" ] || continue
+          if [ "$(cat "$dev/idVendor")" = "06cb" ] && [ "$(cat "$dev/idProduct")" = "00bd" ]; then
+            echo on > "$dev/power/control"
+          fi
+        done
+      '';
+    };
+
     services.gnome.gnome-keyring.enable = true;
     security.pam.services.login.enableGnomeKeyring = true;
     security.pam.services.greetd.enableGnomeKeyring = true;
@@ -161,12 +189,14 @@
     networking.hostName = "t14";
     system.stateVersion = "26.05";
 
-    # Controller (xpad) + vial keyboard udev rules.
+    # Controller (xpad) + vial keyboard udev rules, plus: never let the
+    # Synaptics fingerprint reader (06cb:00bd) go into USB autosuspend.
     services.udev.extraRules = ''
       ACTION=="add", ATTRS{idVendor}=="2dc8", ATTRS{idProduct}=="301c", MODE="0666", \
       RUN+="/sbin/modprobe xpad", \
       RUN+="/bin/sh -c 'echo 2dc8 301c > /sys/bus/usb/drivers/xpad/new_id'"
       KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{serial}=="*vial:f64c2b3c*", MODE="0660", GROUP="users", TAG+="uaccess", TAG+="udev-acl"
+      ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="06cb", ATTR{idProduct}=="00bd", ATTR{power/control}="on"
     '';
 
     users.users.pebor.extraGroups = [ "adbusers" "kvm" "docker" ];
