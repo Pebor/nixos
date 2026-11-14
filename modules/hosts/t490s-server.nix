@@ -57,6 +57,7 @@
       valheim-presence
       hermes-status
       thought-sink
+      forgejo-runner
     ]);
 
     networking.hostName = "t490s";
