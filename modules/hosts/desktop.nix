@@ -63,7 +63,7 @@
     console.keyMap = "cz-lat2";
   };
 
-  flake.modules.homeManager.host-desktop = {
+  flake.modules.homeManager.host-desktop = { lib, ... }: {
     imports = with inputs.self.modules.homeManager; [
       nix-settings
       base
@@ -83,8 +83,8 @@
     home.stateVersion = "25.05";
 
     # FIXME: adjust for your monitors.
-    wayland.windowManager.hyprland.settings.monitor = [
-      ",preferred,0x0,1"
-    ];
+    wayland.windowManager.hyprland.extraConfig = lib.mkAfter ''
+      hl.monitor({ output = "", mode = "preferred", position = "0x0", scale = 1 })
+    '';
   };
 }

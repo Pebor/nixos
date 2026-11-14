@@ -211,55 +211,46 @@
 
     services.hyprpaper.enable = lib.mkForce false;
     
-    wayland.windowManager.hyprland.settings = {
-        "exec-once" = lib.mkForce [
-          # "waybar"
-          "noctalia"
-          # "dunst"
-          "dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP"
-        ];
+    # t14 runs noctalia as its shell instead of the shared waybar + dunst.
+    # (dbus-update-activation-environment is already emitted by the module's
+    # systemd hook, so it is not repeated here.)
+    my.hyprland.autostart = lib.mkForce [ "noctalia" ];
 
-        device = [
-          {
-            name = "tpps/2-elan-trackpoint";
-            sensitivity = -0.4;
-          }
-        ];
+    # Appended after the shared lua config in modules/features/hyprland.nix,
+    # so `mainMod` from there is in scope and later calls win over earlier ones.
+    wayland.windowManager.hyprland.extraConfig = lib.mkAfter ''
+      -- ─── t14: workspace → monitor mapping ───────────────────────────
+      hl.workspace_rule({ workspace = "1", monitor = "eDP-1", default = true })
+      hl.workspace_rule({ workspace = "2", monitor = "eDP-1" })
+      hl.workspace_rule({ workspace = "3", monitor = "eDP-1" })
+      hl.workspace_rule({ workspace = "4", monitor = "eDP-1" })
+      hl.workspace_rule({ workspace = "5", monitor = "eDP-1" })
+      hl.workspace_rule({ workspace = "6", monitor = "HDMI-A-1", default = true })
+      hl.workspace_rule({ workspace = "7", monitor = "HDMI-A-1" })
+      hl.workspace_rule({ workspace = "8", monitor = "HDMI-A-1" })
+      hl.workspace_rule({ workspace = "9", monitor = "HDMI-A-1" })
+      hl.workspace_rule({ workspace = "10", monitor = "HDMI-A-1" })
 
-        workspace = [
-          "1, monitor:eDP-1, default:true"
-          "2, monitor:eDP-1"
-          "3, monitor:eDP-1"
-          "4, monitor:eDP-1"
-          "5, monitor:eDP-1"
-          "6, monitor:HDMI-A-1, default:true"
-          "7, monitor:HDMI-A-1"
-          "8, monitor:HDMI-A-1"
-          "9, monitor:HDMI-A-1"
-          "10, monitor:HDMI-A-1"
-        ];
+      hl.device({ name = "tpps/2-elan-trackpoint", sensitivity = -0.4 })
 
-        bind = [
-          # Move the entire current workspace to the next monitor
-          "$mainMod SHIFT, O, movecurrentworkspacetomonitor, +1"
-          
-          # Swap the active workspaces of the current and next monitor
-          "$mainMod CTRL, O, swapactiveworkspaces, current +1"
-          
-          # Quickly move focus to the next/previous monitor without moving windows
-          "$mainMod, TAB, focusmonitor, +1"
-          "$mainMod SHIFT, TAB, focusmonitor, -1"
-          
-          # Optional: Move the active window to the next monitor silently
-          "$mainMod ALT, O, movewindow, mon:+1"
-          # Cycle through windows forward
-          "ALT, Tab, focuscurrentorlast,"
-          "ALT, Tab, bringactivetotop,"
-          
-          # Cycle through windows backward
-          "ALT SHIFT, Tab, focuscurrentorlast, prev"
-          "ALT SHIFT, Tab, bringactivetotop,"
-        ];
-    };
+      -- ─── t14: monitor binds ─────────────────────────────────────────
+      hl.bind(mainMod .. " + SHIFT + O", function()
+        hl.dispatch(hl.dsp.workspace.move({ workspace = hl.get_active_workspace(), monitor = "+1" }))
+      end)
+      hl.bind(mainMod .. " + CTRL + O",  hl.dsp.workspace.swap_monitors({ monitor1 = "current", monitor2 = "+1" }))
+      hl.bind(mainMod .. " + TAB",         hl.dsp.focus({ monitor = "+1" }))
+      hl.bind(mainMod .. " + SHIFT + TAB", hl.dsp.focus({ monitor = "-1" }))
+      hl.bind(mainMod .. " + ALT + O",     hl.dsp.window.move({ monitor = "+1" }))
+
+      -- ALT+Tab: focus previous window and raise it
+      hl.bind("ALT + Tab", function()
+        hl.dispatch(hl.dsp.focus({ last = true }))
+        hl.dispatch(hl.dsp.window.alter_zorder({ mode = "top" }))
+      end)
+      hl.bind("ALT + SHIFT + Tab", function()
+        hl.dispatch(hl.dsp.focus({ last = true }))
+        hl.dispatch(hl.dsp.window.alter_zorder({ mode = "top" }))
+      end)
+    '';
   };
 }

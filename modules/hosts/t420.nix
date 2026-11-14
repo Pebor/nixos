@@ -52,7 +52,7 @@
     networking.firewall.allowedTCPPorts = [ 22 ];
   };
 
-  flake.modules.homeManager.host-t420 = { pkgs, ... }: {
+  flake.modules.homeManager.host-t420 = { pkgs, lib, ... }: {
     imports = with inputs.self.modules.homeManager; [
       nix-settings
       base
@@ -71,11 +71,9 @@
 
     # NOTE: pkgs.hyprlandPlugins.hyprscrolling no longer exists —
     # the scrolling layout was merged into Hyprland itself.
-    # Enable it via settings (general.layout = "scrolling") if wanted.
-    wayland.windowManager.hyprland = {
-      settings.monitor = [
-        ",preferred,0x0,1"
-      ];
-    };
+    # Enable it via config (general.layout = "scrolling") if wanted.
+    wayland.windowManager.hyprland.extraConfig = lib.mkAfter ''
+      hl.monitor({ output = "", mode = "preferred", position = "0x0", scale = 1 })
+    '';
   };
 }
