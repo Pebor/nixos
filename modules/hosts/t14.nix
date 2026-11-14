@@ -157,7 +157,11 @@
 
     systemd.services.fingerprint-usb-power = {
       description = "Keep the Synaptics fingerprint reader out of USB autosuspend";
-      wantedBy = [ "multi-user.target" ];
+      # powertop and tlp run *after* multi-user.target, so a unit wanted by
+      # multi-user.target could not be ordered after them (systemd drops it as an
+      # ordering cycle). graphical.target is later, so this is genuinely after
+      # powertop has re-enabled autosuspend on every USB device.
+      wantedBy = [ "graphical.target" ];
       after = [ "powertop.service" "tlp.service" ];
       serviceConfig = {
         Type = "oneshot";
