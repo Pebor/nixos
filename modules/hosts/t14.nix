@@ -24,7 +24,16 @@
     ];
   };
 
-  flake.modules.nixos.host-t14 = { pkgs, lib, ... }: {
+  flake.modules.nixos.host-t14 =
+    { pkgs, lib, ... }:
+    let
+      # pam_fprintd accepts "max-tries=N" and "timeout=SECONDS" (see pam_fprintd(8)).
+      fprintTiming = [
+        "max-tries=2"
+        "timeout=5"
+      ];
+    in
+    {
     imports = [
       inputs.determinate.nixosModules.default
       inputs.disko.nixosModules.disko
@@ -76,13 +85,20 @@
       options thinkpad_acpi fan_control=1 i2c_i801 disable_features=0x10
     '';
 
-    # Release the fingerprint device before suspend so an in-progress PAM
-    # verification cannot survive the device reset during S3 resume.
+    # Release the fingerprint device before suspend, and — importantly — do not
+    # restart fprintd on the way back up: libfprint enumerates USB once at
+    # startup and has no hotplug support, so a daemon started in the middle of
+    # the post-resume re-enumeration binds to a device that is about to
+    # disappear ("device was disconnected" / an init-probe failure reported as
+    # "unsupported firmware version"), and every verify then fails until it is
+    # restarted again. fprintd is D-Bus activated, so stopping it is cheap: the
+    # next scan starts a daemon that enumerates the reader that is actually
+    # there.
     powerManagement.powerDownCommands = ''
       systemctl stop fprintd.service || true
     '';
     powerManagement.resumeCommands = ''
-      systemctl restart fprintd.service
+      systemctl stop fprintd.service || true
     '';
 
     # Suspend on lid close even when the charger or an external display is
@@ -177,6 +193,34 @@
       '';
     };
 
+    # fprintd keeps its device handle forever; after any re-enumeration of the
+    # reader (resume, power cycle, replug) that handle points at a device that
+    # no longer exists. Drop the daemon on the device's "add" event so the next
+    # scan starts fresh, and give it a short stop timeout so a wedged daemon
+    # (it has been seen to ignore SIGTERM) cannot stall the stop.
+    systemd.services.fprintd.serviceConfig.TimeoutStopSec = 3;
+
+    systemd.services.fprintd-reinit = {
+      description = "Drop fprintd after the fingerprint reader re-enumerated";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${pkgs.systemd}/bin/systemctl stop fprintd.service";
+      };
+    };
+
+    # pam_fprintd is the first rule in every stack it is enabled for, and it
+    # blocks until it gets a scan or its own timeout expires (upstream defaults:
+    # 3 tries x 30 s). That is the "password takes ages" feeling on the lock
+    # screen: typing the password does nothing while PAM is still waiting for a
+    # finger. Two tries / 5 s per try, then pam_unix takes over immediately.
+    security.pam.services.login.rules.auth.fprintd.args = fprintTiming;
+    security.pam.services.hyprlock.rules.auth.fprintd.args = fprintTiming;
+    security.pam.services."polkit-1".rules.auth.fprintd.args = fprintTiming;
+    security.pam.services.sudo.rules.auth.fprintd.args = fprintTiming;
+    security.pam.services.su.rules.auth.fprintd.args = fprintTiming;
+    security.pam.services."systemd-user".rules.auth.fprintd.args = fprintTiming;
+    security.pam.services.sshd.rules.auth.fprintd.args = fprintTiming;
+
     services.gnome.gnome-keyring.enable = true;
     security.pam.services.login.enableGnomeKeyring = true;
     security.pam.services.greetd.enableGnomeKeyring = true;
@@ -200,7 +244,7 @@
       RUN+="/sbin/modprobe xpad", \
       RUN+="/bin/sh -c 'echo 2dc8 301c > /sys/bus/usb/drivers/xpad/new_id'"
       KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{serial}=="*vial:f64c2b3c*", MODE="0660", GROUP="users", TAG+="uaccess", TAG+="udev-acl"
-      ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="06cb", ATTR{idProduct}=="00bd", ATTR{power/control}="on"
+      ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="06cb", ATTR{idProduct}=="00bd", ATTR{power/control}="on", TAG+="systemd", ENV{SYSTEMD_WANTS}+="fprintd-reinit.service"
     '';
 
     users.users.pebor.extraGroups = [ "adbusers" "kvm" "docker" ];
