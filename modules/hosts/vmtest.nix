@@ -22,7 +22,7 @@ in
     stylix.autoEnable = false;
 
     imports =
-      (with inputs.self.modules.nixos; [ nix-settings system hyprland stylix ])
+      (with inputs.self.modules.nixos; [ nix-settings system hyprland stylix bootvine ])
       ++ [ inputs.home-manager.nixosModules.home-manager ];
 
     users.users.pebor = {
